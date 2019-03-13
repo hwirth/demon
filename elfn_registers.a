@@ -1,0 +1,193 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone SHOW_REGISTERS
+;==============================================================================
+
+	.sreg	= $fb
+
+show_registers
+;------------------------------------------------------------------------------
+		JSR goto_pos0
+
+		LDA #<s_registers
+		PHA
+		LDA #>s_registers
+		PHA
+		JSR puts
+update_registers
+		LDA client_pc+1		; >PC
+		JSR puts_hexbyte
+		LDA client_pc		; <PC
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		LDA client_irqv+1	; >IRQ vector
+		JSR puts_hexbyte
+		LDA client_irqv		; <IRQ vector
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		LDA client_bank		; Get ROM visibilities
+		AND #07
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		LDA client_akku
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		LDA client_xreg
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		LDA client_yreg
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+		SEC
+		LDA client_sptr
+		SBC # 2
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+!if (0) {
+		LDA #<s_space_40 + 35
+		PHA
+		LDA #>s_space_40 + 35
+		PHA
+		JSR puts
+}
+		LDA client_sreg
+		STA .sreg
+		LDY # 8
+		CLC
+.loop_flags	ASL .sreg
+		BCS .flag_set
+.flag_clear	LDA #'.'
+		BNE .flag_print
+.flag_set	LDA #'*'
+.flag_print	JSR putc
+		DEY
+		BNE .loop_flags
+
+!ifdef STEP_REGS_COLOR {
+	!ifdef USE_COLORS {
+		LDA cramcolor_text
+		STA puts_color
+	}
+}
+!ifdef REGS_DISASS {
+		LDA direct_command
+		BNE .skip_disass
+
+		LDA #'d'		; Show upcoming instruction
+		LDX client_pc
+		LDY client_pc+1
+		JSR call_elfn_single_param
+		JSR elfn_disassemble
+.skip_disass
+}
+.done		CLC			; Trigger newline
+		RTS
+
+
+;==============================================================================
+!zone ELFN_REGISTERS
+;==============================================================================
+
+.error		CPY # 1			; Only 'r' was input?
+		BEQ .show_registers
+		JMP line_show_error	; If not, we cannot parse the line
+
+.show_registers
+!ifdef USE_COLORS {
+	!ifdef STEP_REGS_COLOR {
+		LDA puts_color
+		PHA
+		LDA #cram_grey
+		;;STA puts_color
+	}
+}
+		JSR puts_newline
+		JSR show_registers
+!ifdef USE_COLORS {
+	!ifdef STEP_REGS_COLOR {
+		PLA
+		STA puts_color
+	}
+}
+		CLC			; Trigger newline
+		RTS
+
+
+elfn_registers
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_int16	; Read start address
+		BCS .error		; If none, report error
+		STX client_pc
+		STA client_pc+1
+
+		JSR line_expect_empty
+		BCC .no_params
+
+		JSR line_expect_int16
+		BCS .error
+		STX client_irqv
+		STA client_irqv+1
+
+		JSR line_expect_int8
+		BCS .error
+		STA client_bank
+
+		JSR line_expect_int8
+		BCS .error
+		STA client_akku
+
+		JSR line_expect_int8
+		BCS .error
+		STA client_xreg
+
+		JSR line_expect_int8
+		BCS .error
+		STA client_yreg
+
+		JSR line_expect_int8
+		BCS .error
+		;CLC
+		;ADC # 2			; Compensate for current subroutine
+		;STA client_sptr
+
+		JSR line_expect_flags
+		BCS .error
+		STA client_sreg
+
+.no_params	LDX # 1
+		LDY zp_crsr_row
+		JSR goto_xy
+		JMP update_registers
+
+
+;==============================================================================
+!zone ELFN_REGISTERS_STRINGS
+;==============================================================================
+
+s_registers	!pet "  pc  irq  bk ac xr yr sp "
+s_flag_names	!pet "nv#bdizc", 13		; Used by  opcode_matrix.a
+		!pet ";"
+		!pet 0
+
+
+;==============================================================================
+!eof

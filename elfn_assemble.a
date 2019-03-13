@@ -1,0 +1,798 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ASSEMBLE
+;==============================================================================
+
+	.bptr	= $f7			; Backup pointer to start of string
+	.sptr	= $f8			; Moving pointer into string
+	.mptr	= $fa			; Pointer to mnemonic list
+
+	.mnemonic	= $fa		; Results of string analysis
+	.amode		= $fb
+	.param_lo	= $fc
+	.param_hi	= $fd
+	.temp		= $fe
+	.RESERVED	= $ff	; by mmfn_scroll.a:find_preceding_instruction
+
+
+.inc_sptr
+;------------------------------------------------------------------------------
+		INC .sptr
+		BNE .inc_done
+		INC .sptr+1
+.inc_done	RTS
+
+
+.add_to_sptr
+;------------------------------------------------------------------------------
+; IN:	.Y	uint8	Value to add to .sptr
+
+		STY $02
+		CLC
+		LDA .sptr
+		ADC $02
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+		RTS
+
+
+;------------------------------------------------------------------------------
+.error		SEC
+		LDA .sptr
+		SBC .bptr		; Return index to offending char
+		SEC
+		RTS
+
+assemble
+;==============================================================================
+; IN:	.X/.A	uint16	Pointer to first char
+; OUT:	.A	int8	CARRY set: see .error
+
+		STX .sptr		; Save pointer to string
+		STA .sptr+1
+		STX .bptr		; Remember start for reporting error
+
+		LDA # 0			; Clear temporary variables
+		LDY #clear_end - clear_start
+.clear_loop	DEY
+		STA clear_start,Y
+		BNE .clear_loop
+;------------------------------------------------------------------------------
+		JSR .skip_numbers	; Move .sptr to the first non-digit
+		BCS .error		; Extracts address to addr_lo/hi
+
+		JSR .find_mnemonic	; Find index to mnemonics list
+		BCS .error
+		STA .mnemonic
+
+		JSR .find_space		; Skip space between mnemonic/operand
+		BCS .error
+
+		JSR .find_amode		; Address mode, amode_prefix/postfix
+		BCS .error
+		STA .amode
+
+		JSR .find_opcode	; Check for legal address mode
+		BCS .error
+		;STA .opcode
+;------------------------------------------------------------------------------
+		; Finalize assembly
+
+		STA asm_opcode		; Return opcode
+
+		LDA mnem_param+0	; Find length of operand (1 or 2 bytes)
+		BEQ .set_len_1
+		LDA mnem_param+2
+		BEQ .set_len_2
+.set_len_3	LDA # 3
+		BNE .set_len
+.set_len_2	LDA # 2
+		BNE .set_len
+.set_len_1	LDA # 1
+.set_len	STA asm_ilen		; Return length of instruction
+
+		LDA mnem_param+0	; Convert operand fisrt 2 bytes to int8
+		BEQ .success
+		JSR str_to_nibble
+		ASL
+		ASL
+		ASL
+		ASL
+		STA .temp
+		LDA mnem_param+1
+		JSR str_to_nibble
+		ORA .temp
+		STA asm_operand_lo	; Return operand low byte
+
+		LDA asm_ilen
+		CMP # 3
+		BNE .skip_hi
+
+		LDA asm_operand_lo
+		STA asm_operand_hi
+
+		LDA mnem_param+2	; Convert operand 2nd two bytes to int8
+		JSR str_to_nibble
+		ASL
+		ASL
+		ASL
+		ASL
+		STA .temp
+		LDA mnem_param+3
+		JSR str_to_nibble
+		ORA .temp
+		STA asm_operand_lo	; Return operand high byte
+.skip_hi
+		; Check for aREL, branch instructions:
+		; $10   %00010000   BCC
+		; $30   %00110000   BCS
+		; $50   %01010000   BEQ
+		; $70   %01110000   BNE
+		; $90   %10010000   BPL
+		; $b0   %10110000   BMI
+		; $d0   %11010000   BVC
+		; $f0   %11110000   BVS
+		LDA asm_opcode		; Check, if we need to correct for aREL
+		AND #$1f
+		CMP #$10
+		BNE .success		; Not a branch instruction
+
+.aREL_correct	SEC			; Convert absolute address into aREL
+		LDA asm_operand_lo
+		SBC addr_lo
+		SEC
+		SBC # 2
+		STA asm_operand_lo
+		DEC asm_ilen		; Machine code is only 2 bytes!
+
+.success	CLC
+		RTS
+
+
+.skip_numbers
+;==============================================================================
+; IN:	.sptr	uint16	Pointer to string
+; OUT:	.sptr	uint16	Pointer to first non-digit/white space
+
+		LDY # 0			; Extract address (first 4 chars)
+		LDA (.sptr),Y		; and convert to int16
+		JSR str_to_nibble
+		ASL			; Shift first nibble to high nibble
+		ASL
+		ASL
+		ASL
+		STA $02
+		INY
+		LDA (.sptr),Y
+		JSR str_to_nibble
+		ORA $02			; Combine with low nibble
+		STA addr_hi		; Save address for aREL calculations
+
+		INY
+		LDA (.sptr),Y
+		JSR str_to_nibble
+		ASL
+		ASL
+		ASL
+		ASL
+		STA $02
+		INY
+		LDA (.sptr),Y
+		JSR str_to_nibble
+		ORA $02			; Combine with low nibble
+		STA addr_lo		; Save address for aREL calculations
+
+		; Skip up to 14 digits/space chars, so .sptr points to OPC
+		; AAAA MM MM MM OPC
+		; AAAA MM MM    OPC
+		; AAAA MM       OPC
+		; AAAA     OPC
+
+		; Check, if address is given
+		LDY # 0
+		LDX # 4
+.num_addr_loop	JSR .is_hex_digit
+		BCS .num_error
+		JSR .inc_sptr
+		DEX
+		BNE .num_addr_loop
+
+		JSR .find_space
+		BCS .num_error
+		JSR .inc_sptr
+
+		JSR .find_byte_or_space
+		JSR .find_byte_or_space
+		JSR .find_byte_or_space
+		CLC
+		RTS
+
+.num_error	SEC
+		RTS
+
+
+.find_byte_or_space
+;------------------------------------------------------------------------------
+		LDA .sptr		; Keep value in case of error
+		PHA
+		LDA .sptr+1
+		PHA
+
+		LDA (.sptr),Y
+		CMP #' '
+		BEQ .check_3_space
+
+		JSR .is_hex_digit
+		BCS .no_byte_space
+		JSR .inc_sptr
+		JSR .is_hex_digit
+		BCS .no_byte_space
+		BCC .check_1_space
+
+.check_3_space	JSR .inc_sptr
+		LDA (.sptr),Y
+		CMP #' '
+		BNE .no_byte_space
+.check_1_space	JSR .inc_sptr
+		LDA (.sptr),Y
+		CMP #' '
+		BNE .no_byte_space
+.valid_byte_space
+		JSR .inc_sptr
+		PLA
+		PLA
+		CLC
+		RTS
+
+.no_byte_space	PLA
+		STA .sptr+1
+		PLA
+		STA .sptr
+		SEC
+		RTS
+
+
+.is_hex_digit
+;------------------------------------------------------------------------------
+; IN:	.A	char	PETSCII code to be checked, if 0..9, a..f
+; OUT:	CARRY	Boolean	FALSE, if .A contains a digit
+
+		LDA (.sptr),Y
+		CMP #'0'
+		BCC .check_alpha
+		CMP #'9'+1
+		BCS .check_alpha
+.is_digit	CLC
+		RTS
+
+.check_alpha	CMP #'a'
+		BCC .no_hex_digit
+		CMP #'f'+1
+		BCC .is_digit
+.no_hex_digit	SEC
+		RTS
+
+
+.find_mnemonic
+;==============================================================================
+; OUT:	.A	uint8	Index to mnemonic_index_lo
+;	CARRY	Boolean	TRUE: Mnemonic was not identified
+
+		LDY # 0			; Copy first 3 chars to buffer
+		LDA (.sptr),Y
+		STA mnem_temp
+		INY
+		LDA (.sptr),Y
+		STA mnem_temp+1
+		INY
+		LDA (.sptr),Y
+		STA mnem_temp+2
+
+		LDA #<mnemonic_names
+		STA .mptr
+		LDA #>mnemonic_names
+		STA .mptr+1
+
+		LDX # 0			; Keep track of opcode number
+		LDY # 0
+.mnem_loop	LDA (.mptr),Y		; Load first char from mnemonic list
+		BEQ .mnem_error		; End of list, mnemonic not recognized
+		CMP mnem_temp		; Equal to first char?
+		BNE .mnem_skip_3	; Select next entry in mnemonic list
+
+		INY
+		LDA (.mptr),Y
+		CMP mnem_temp+1
+		BNE .mnem_skip_2	; Select next entry in mnemonic list
+
+		INY
+		LDA (.mptr),Y
+		CMP mnem_temp+2
+		BNE .mnem_skip_1	; Select next entry in mnemonic list
+
+		LDY # 3
+		JSR .add_to_sptr	; Add .Y to .sptr
+		TXA			; Return mnemonic index
+		CLC			; Signal found mnemonic
+		RTS
+
+.mnem_skip_3	INY			; Move offset to next list entry
+.mnem_skip_2	INY
+.mnem_skip_1	INY
+		INX			; Index of next mnemonic to check
+		BNE .mnem_loop
+
+.mnem_error	SEC			; Signal unidentified mnemonic
+		RTS
+
+
+.find_space
+;==============================================================================
+		LDY # 0
+		LDA (.sptr),Y
+		BEQ .space_found
+		CMP #' '
+		BNE .space_error
+.space_found	CLC
+		RTS
+
+.space_error	SEC
+		RTS
+
+
+.find_amode
+;==============================================================================
+		LDY # 0
+		LDA (.sptr),Y
+		BEQ .amode_imp		; End of string?
+		JSR .inc_sptr
+		CMP #' '
+		BEQ .amode_cont_1
+		JMP .amode_error
+
+.amode_imp	LDA #aIMP
+		STA .amode
+		CLC			; Signal address mode identified
+		RTS
+
+.amode_cont_1	LDA (.sptr),Y
+		BEQ .amode_imp		; End of string: imperative addr. mode
+		CMP #' '
+		BEQ .amode_imp		; End of line: imperative address mode
+		CMP #'$'
+		BEQ .amode_dollar	; Absolute or indexed, 2 or 4 nibbles
+		CMP #'#'
+		BEQ .amode_hash		; Immediate, expecting 2 nibbles
+		CMP #'('
+		BEQ .amode_oparen
+		JMP .amode_error	; ZP-indexed, expecting 2 nibbles
+
+.amode_oparen
+.amode_hash	STA amode_pre_1	; Remember the '#' or '('
+		JSR .inc_sptr		; Skip it
+		LDA (.sptr),Y
+		CMP #'$'
+		BEQ .amode_dollar
+.amode_jmp_err	JMP .amode_error
+
+.amode_dollar	STA amode_pre_2
+		JSR .inc_sptr		; Skip the dollar sign
+
+		JSR .find_digit		; Look for operand
+		BCS .amode_jmp_err	; Must be a nible
+		STA mnem_param		; Save char
+		JSR .find_digit
+		BCS .amode_jmp_err	; Must be a nibble
+		STA mnem_param+1	; Save char
+
+		JSR .find_digit		; MAY be a nibble (1 or 2 byte operand)
+		BCS .find_postfix	; Next char not a digit?
+		STA mnem_param+2
+		JSR .find_digit
+		BCS .amode_jmp_err	; Must be a nibble
+		STA mnem_param+3
+		LDA (.sptr),Y		; Check for EOS, ',' or ')'
+		JSR .inc_sptr
+
+.find_postfix	CMP # 0
+		BEQ .amode_no_post	; End of string?
+		CMP #' '
+		BEQ .amode_no_post	; End of line?
+		CMP #','
+		BEQ .amode_comma
+		CMP #')'
+		BEQ .amode_cparen
+		BNE .amode_jmp_err
+
+.amode_comma	LDA (.sptr),Y		; May be: ($ll,X) or $hhll,{X,Y}
+		JSR .inc_sptr
+		CMP #'y'
+		BEQ .amode_aby
+		CMP #'x'
+		BNE .amode_error	; Can only be ($ll,X) or $hhll,X
+		LDA mnem_param+2
+		BEQ .amode_inx
+.amode_abx	LDA #aABX		; Can only be $hhll,X
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_inx	LDA (.sptr),Y		; Must be ($ll,X) or $ll,X
+		JSR .inc_sptr
+		CMP #')'
+		BNE .amode_zpx
+		LDA #aINX
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_zpx	LDA #aZPX
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_aby	LDA mnem_param+2	; May be $ll,Y or $hhll,Y
+		BEQ .amode_zpy
+		LDA #aABY
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_zpy	LDA #aZPY
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_cparen	LDA (.sptr),Y		; May be: ($ll),Y or ($hhll)
+		JSR .inc_sptr
+		CMP # 0
+		BEQ .amode_chk_ind	; End of string: Probably ($hhll)
+		CMP #' '
+		BEQ .amode_chk_ind	; End of line: Probably ($hhll)
+		CMP #','
+		BNE .amode_error2	; Doesn't exist: ($ll)
+		LDA (.sptr),Y
+		JSR .inc_sptr
+		CMP #'y'		; Either ($ll),Y or error
+		BNE .amode_error1
+.amode_iny	LDA #aINY
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_chk_ind	LDA mnem_param+2	; Indirect must have 4 nibbles
+		BEQ .amode_error2
+		LDA #aIND
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_no_post	LDA amode_pre_1		; May be: $hhll, $ll or #$ll
+		CMP #'#'
+		BEQ .amode_imm
+		LDA amode_pre_2
+		CMP #'$'
+		BNE .amode_error
+		LDA mnem_param+2
+		BEQ .amode_abs_zp
+.amode_abs	LDA #aABS
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_abs_zp	LDA #aZP
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_imm	LDA mnem_param+2
+		BNE .amode_error
+		LDA #aIMM
+		BNE .amode_done		; Will always jump, aIMP = 0
+
+.amode_error	SEC			; Signal error
+		RTS
+
+.amode_done	STA .amode
+		CLC			; Signal address mode identified
+		RTS
+
+.amode_error1	LDA # 1
+		BNE .amode_errsub
+
+.amode_error2	LDA # 2
+.amode_errsub	STA .amode_sbc+1
+		SEC
+		LDA .sptr
+.amode_sbc	SBC # 2
+		STA .sptr
+		LDA .sptr+1
+		SBC # 0
+		STA .sptr+1
+		SEC
+		RTS
+
+
+
+.find_digit
+;------------------------------------------------------------------------------
+; OUT:	.A	char	Analyzed character
+;	CARRY	Boolean	FALSE, when it was a hexadecimal digit (0..9, a..f)
+
+		LDY # 0
+		LDA (.sptr),Y
+		JSR .inc_sptr
+		CMP #'0'
+		BCC .digit_alpha
+		CMP #'9'+1
+		BCS .digit_alpha
+		RTS			; Return cleared carry
+
+.digit_alpha	CMP #'a'
+		BCC .digit_error	; Set carry and return
+		CMP #'f'+1
+		RTS			; Return resulting carry
+
+.digit_error	SEC
+.digit_exit	RTS
+
+
+
+.find_opcode
+;==============================================================================
+; IN:	.mnemonic	uint8	Index to mnemonic_index_lo
+;	.amode		uint8	Address mode, according to constants in amode_matrix
+
+;------------------------------------------------------------------------------
+		; Apply special corrections
+
+		LDA .mnemonic		; Multiply by 3, so we can match with
+		STA $02			; the low byte of mXXX addresses
+		ASL
+		CLC
+		ADC $02
+
+		CMP #<mROL
+		BEQ .opc_akk
+		CMP #<mROR
+		BEQ .opc_akk
+		CMP #<mASL
+		BEQ .opc_akk
+		CMP #<mLSR
+		BEQ .opc_akk
+
+		LDA .mnemonic
+		CMP #$23
+		BCC .opc_start
+		CMP #$2a+1
+		BCS .opc_start
+		BEQ .opc_rel
+
+.opc_rel	LDA .amode
+		CMP #aABS
+		BNE .opc_error
+		LDA #aREL
+		STA .amode
+		BNE .opc_start		; Will always jump, aIMP = 0
+
+.opc_akk	LDA .amode
+		CMP #aIMP
+		BNE .opc_start
+		LDA #aAKK
+		STA .amode
+;------------------------------------------------------------------------------
+		; Search opcode_matrix for mnemonic_index_lo and check,
+		; if the given address mode does exists in amode_matrix
+
+.opc_start	CLC			; Multiply mnemonic by 3, so it matches
+		LDA .mnemonic		; the entries in opcode_matrix
+		ASL
+		ADC .mnemonic
+		STA .mnemonic
+
+		LDY # 0			; Check all opcodes in matrix
+.opc_loop	LDA opcode_matrix,Y
+		CMP .mnemonic		; Matrix entry is variant of mnemonic?
+		BNE .opc_next
+		LDA amode_matrix,Y	; Get address mode for opcode #.Y
+		CMP .amode		; Is amode allowed with this mnemonic?
+		BEQ .opc_found
+.opc_next	INY
+		BNE .opc_loop
+
+.opc_error	SEC			; End of list reached, report error
+		RTS
+
+.opc_found	TYA			; Return opcode
+		CLC
+		RTS
+
+
+;==============================================================================
+!zone ELFN_ASSEMBLE
+;==============================================================================
+
+	.sptr		= $f7
+	.tptr		= $f9
+
+	.to_addr	= param_1	; Assemble to address
+	.next_addr	= param_2	; Next free address after instruction
+	.strbuf		= TAPE_BUFFER	; Converted copy of input line, result
+					; of  disassemble .
+
+;------------------------------------------------------------------------------
+.error		JMP line_show_error
+
+elfn_assemble
+;==============================================================================
+		LDA el_command
+!ifdef RELOCATE {
+		CMP #'-'
+		BNE .skip_delete
+
+		JMP workspace_delete	; Remove instructions
+}
+.skip_delete	CMP #'.'		; Remember, if we were called via "a"
+		BNE .keep_cmd		; or "+", replace '.' with 'a'
+		LDA #'a'
+.keep_cmd	STA el_command
+
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+
+		STX .to_addr		; Save given address
+		STA .to_addr+1
+
+		JSR line_expect_empty	; Empty line, aborting input?
+		BCS .skip_abort		; Not empty: parse
+		LDY # 15		; Something entered at indented pos?
+		LDA .strbuf,Y
+		CMP #' '
+		BNE .skip_abort		; Yes: parse
+		CLC			; Trigger newline
+		RTS			; Abort assembly
+.skip_abort
+		SEC			; Calculate pointer to begin of line
+		LDA puts_vptr
+		SBC zp_crsr_col
+		STA .sptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .sptr+1
+;------------------------------------------------------------------------------
+		; Convert screen line to string
+
+		LDY # 39
+.loop_convert	LDA (.sptr),Y
+		JSR screen_to_petscii
+		JSR to_lower_case
+		STA .strbuf-1,Y
+		DEY
+		BNE .loop_convert	; Omitting offset 0
+
+		LDA # 0			; Find last char and add EOS after it
+		LDY # 39
+.loop_null	LDX .strbuf-1,Y
+		CPX #' '
+		BNE .done_null
+		STA .strbuf-1,Y
+		DEY
+		BNE .loop_null
+.done_null
+;------------------------------------------------------------------------------
+!ifdef SYMBOLS	JSR symbol_to_address
+;------------------------------------------------------------------------------
+		; Assemble instruction
+
+		LDX #<.strbuf
+		LDA #>.strbuf
+
+;------------------------------------------------------------------------------
+		JSR assemble		; Convert string to instruction
+		BCC .save_result
+;------------------------------------------------------------------------------
+		TAY
+		CPY # 5			; Entered only aXXXX? End assembling
+		BEQ .check_endasm
+.jmp_error	INY
+		JMP .error
+
+.check_endasm	LDA .strbuf,Y
+		CMP #' '
+		BNE .jmp_error
+
+.end_assembly	CLC			; Trigger newline
+		RTS
+
+;------------------------------------------------------------------------------
+		; Save result to memory
+
+.save_result
+!ifdef RELOCATE {
+		LDA el_command		; Do we need to insert code?
+		CMP #'+'
+		BNE .insert_ok
+
+.insert_reloc	LDX .to_addr		; Relocate code up to 3 bytes, making
+		LDA .to_addr+1		; room for the new instruction
+		LDY asm_ilen
+
+		JSR workspace_insert
+
+		BCC .insert_ok
+		LDY # 0			; Indicate problem with relocate by
+		JMP line_show_error	; moving cursor over '+' char
+.insert_ok
+}
+		LDA .to_addr		; Get address from temp. variables
+		STA .tptr
+		LDA .to_addr+1
+		STA .tptr+1
+
+.save_op	LDY # 0			; Store opcode
+		LDA asm_opcode
+		STA (.tptr),Y
+		INY
+		CPY asm_ilen
+		BCS .done
+
+		LDA asm_operand_lo	; Store operand low byte
+		STA (.tptr),Y
+		INY
+		CPY asm_ilen
+		BCS .done
+
+		LDA asm_operand_hi	; Store operand high byte
+		STA (.tptr),Y
+.done
+;------------------------------------------------------------------------------
+		; Update current line, overwriting user input, indenting
+
+		LDX # 0			; Print 'a' command
+		LDY zp_crsr_row
+		JSR goto_xy
+		LDA el_command
+		JSR putc
+
+		LDX .to_addr		; Get address of new instruction
+		LDA .to_addr+1
+
+		JSR disassemble		; Generate formatted line of code
+!ifdef SYMBOLS	JSR address_to_symbol	; Replace address with symbol, if exists
+
+		STX param_2		; Save following address
+		STA param_2+1
+
+		LDA #<.strbuf		; Print disassembled instruction
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		CLC			; Clear rest of line
+		LDA #<s_space_40+1
+		ADC zp_crsr_col
+		PHA
+		LDA #>s_space_40+1
+		ADC # 0
+		PHA
+		JSR puts
+
+		LDX .to_addr		; Show used flags and cycles of instr.
+		LDA .to_addr+1
+		JSR disassemble_show_flags
+		JSR puts_newline
+;------------------------------------------------------------------------------
+		; Prepare next line for continued input
+
+		LDA el_command		; Print new 'a' command
+		JSR putc
+
+		LDA param_2+1		; Print new address
+		JSR puts_hexbyte
+
+		LDA param_2
+		JSR puts_hexbyte
+
+		LDY # 10		; Move to column 15
+		LDA #petscii_right
+.loop_right	JSR putc
+		DEY
+		BNE .loop_right
+
+		SEC			; Prevent newline
+		RTS
+
+
+;==============================================================================
+!eof

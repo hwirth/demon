@@ -1,0 +1,129 @@
+HOOKS and OPTIONS
+=================
+If you want to select any of the hooks or options like DEBUG = 1, make sure
+to define them before including any toolbox files.
+
+Available options
+-----------------
+	DEBUG			Used in various locations
+	DEBUG_NOSAVESCREEN	Do not attempt to save/restore screen memory
+	IRQ_HOOK		Call custom_irq_handler in the ISR
+	GETKEY_HOOK		Call custom_getkey_handler
+
+
+FIX LO/HI BYTE ORDER
+====================
+	call_save_screen
+
+TOOLBOX
+=======
+[ ] puts/constants: VRAM is not always at $0400! --> variable
+[ ] Prinmenu: colors: Init-->vars, print_menu replaces default colors in
+    strings (toolbox provides constants for menu, background, etc) with
+    currently selected color set
+[ ] rename prefix sys_* to call_*, Call BASIC entry points sysfn_*
+[ ] print_menu: change to scroll_top/bottom
+[ ] sub_from_vptr - use sub with eor
+[ ] Load/Save screen: Pass params via .X/.A instead of stack
+[ ] ClrScr: Don't go to bottom of screen
+[ ] Move local temp vars to a common place (heap?), use assigned addresses
+    instead of .label !byte 0  -->  .label = $abcd
+[!] !ifdef {} else {} should work! (getkey)
+[ ] window.a: set scroll area, draw box
+[?] puts: use JSR $AB45     ; Output Format Character
+[ ] puts: DEL does not move chars right of cursor
+[ ] Add puts_scroll_mode to puts_save_state
+[ ] puts.a:goto_xy: Redundant: save_cursor_color_pos, use puts_save_state!
+[ ] puts: keep within scroll area (left/right)
+[ ] Home key: -> begin of line -> end of line -> top home <--> btm home
+[ ] print_menu, getkey - init_toolbox: calculate space, menubar strings, scroll
+    area
+[!] print_menu: pha 1 string only, it is made up of 4 strings (EOS divided) for
+    TL, TER, BL, BR
+
+[ ] Save/restore screen: disable ROMs, access all RAM areas while copying
+[ ] Use save_screen/restore_screen from mandelbrot.prg
+[ ] scroll/save/restore screen: Use:
+	$A3BF - move bytes routine
+	$5F/$60 source start address
+	$5A/$5B source end address
+	$58/$59 destination end address
+
+[ ] Rename switch TOOLBOX --> BASIC_TOOLBOX
+[ ] Get rid of jsr_prefices
+[!] Make use of !convtab PET { LDA #'x' }
+[ ] Replace SUB using $02 as temp location with LDA/EOR$ff/SEC/ADC
+[?] config_menu <--> print_menu
+[?] RASTER TUNE: Check ZP vars
+[ ] hexdump: overflow $ffff --> $0000: Calculate count before start, don't use
+    check if start > end, alternatively use uint24_t
+[ ] hexdump: Colored addresses: Check for each byte
+[\] puts: Load/Store vptr, cptr from/to non-ZP-vars, have goto_xy access these
+[!] puts: C= + Color @homepos: Cursor disappears!?
+[ ] puts: Check for scrolling, if no menu present
+[ ] puts: Scroll: Flexible menu recognition, not just bottom 2 rows
+[ ] menu: Toggle menu bars
+[ ] menu: Using y-softscroll 4 to save one line
+[!] menu: HOOKS for getkey, print_menu, first_call
+[ ] RAM under ROM areas: Visualize
+[ ] hexedit: [Shift+] TAB --> next byte
+[ ] hexedit: Copy/cut/paste/undo - save/restore screen?
+[ ] hexedit: Copy/paste: [Shift+] Restore
+[ ] Optimize: Put temp data in cassette puffer
+[ ] floppy.a, sector.a: Handle device not present!
+[ ] Move directory from Fumble to Toolbox, add hooks
+[ ] vram_read_byte: Return $FF or '?' for invalid chars
+[!] Make uniform: Stack: "PHA lo, PHA hi / PLA hi, PLA lo", .A = Hi, .X Lo
+[!] byte_to_hex now returning high nibble in .A !!
+[ ] load/save screen: Fix off by one
+[ ] Test all modules as toolbox routines, too!
+[ ] helpers: word_to_str: works only, as long as every hex digit < 8
+[ ] Getkey: Repeat - implement direct scan, 3 keys simultaneously
+
+
+DISQ
+====
+[ ] Use dos_{device,drive}
+
+;$292 	658 		Automatischen Scrollen abwärts ein (nur bei Wert 0) / aus
+;?? doesnt work
+
+
+
+
+
+-t17: 19s
+t18: 18s
+t19: 17s
+t20: 66,illegal trtelnetack or sector,t,s
+t21-24: 18s
+t25: 17s
+t26-t50++
+: 19s (50!?)
+-t19: s20:"No channel", s21+ 66illegal?
+
+
+02:40:16 AM) mar77i: you could turn off scrolling, but I believe that gets you stuck on the bottom line. to fix that you'd have to shoehorn the scrolling mechanism to a new wrap-to-the-top mechanism.
+(02:41:54 AM) mar77i: poke 0,658 should do the trick http://unusedino.de/ec64/technical/aay/c64/zp0292.htm
+(02:44:02 AM) mar77i: there's 172/173, too, but that's the pointer to the n
+(02:44:07 AM) mar77i: number of lines.
+(02:44:11 AM) mar77i: 0x28 should be 40
+(02:45:47 AM) mar77i: if you put the 64 in 38 line mode in d016 bit 3, you can go and set 172 to 0x26 accordingly
+(02:46:36 AM) mar77i: if you want to play silly and only scroll across the top 5 lines, try poking 5 to 0x26. funny that I don't even know whether you can change the top line too somehow
+(02:46:48 AM) mar77i: 5 to 172, I meant.
+(02:47:22 AM) mar77i: also, this is the most c64 thing you'll find, I guess http://unusedino.de/ec64/technical/aay/c64/
+(02:48:29 AM) mar77i: ah, with 217-242 you could adjust those pointers down.
+(02:49:11 AM) mar77i: you could go apple ][ mode all the way.
+(02:50:45 AM) mar77i: with interrupts, you might even be able to use bitmaps wherever you don't show the basic widget. and I also read stuff about how you'd assign F1-F8 using rather simple config
+(02:53:50 AM) mar77i: ah, the 28 char mode is horizontal.
+(02:54:22 AM) mar77i: but I thought there's a fewer lines mode as well. d011 bit 3!
+(02:54:30 AM) mar77i: 24 and 25 line modes.
+(02:55:05 AM) mar77i: it's been a while
+
+
+
+
+CARDS
+=====
+[ ] Joker
+[ ] Symbol der Farbe statt Fantasiedinger bei Figurkarten

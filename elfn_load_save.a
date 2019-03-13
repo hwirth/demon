@@ -1,0 +1,229 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ELFN_LOAD
+;==============================================================================
+
+	.addr		= $f7
+	.fn_y		= $fb
+	.to_addr_given	= $fc
+	.fptr		= $fd
+	.strbuf		= TAPE_BUFFER
+
+.error		JMP line_show_error
+
+elfn_load
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_quoted	; Check for quoted file name
+		BCS .error
+
+.check_quot1	LDA .strbuf+1		; Verify opening quotation mark ;;?
+!convtab SCR {	CMP #'"' }
+		BEQ .check_quot2
+		LDY # 1
+		BNE .error		; Will always jump
+
+.check_quot2	LDA .strbuf-1,Y		; Verify closing quotation mark ;;?
+!convtab SCR {	CMP #'"' }
+		BEQ .check_fnlength
+		DEY
+		JMP .error
+
+.check_fnlength	STY .fn_y		; Check for a space after quoted fn
+		CPY # 4
+		BCS .check_space
+		DEY
+		JMP .error
+
+.check_space	LDA .strbuf,Y		; Verify space after fn ;;?
+!convtab SCR {	CMP #' ' }
+		BNE .error
+		INY
+
+		JSR line_expect_int8	; Get device number
+		BCS .error
+		STA dos_device
+
+		JSR line_expect_int16	; Get optional load address
+		BCS .no_load_addr
+		STX .addr
+		STA .addr+1
+		LDA #$ff
+		JMP .start_load
+
+.no_load_addr	LDA #$00
+;------------------------------------------------------------------------------
+.start_load	STA .to_addr_given
+		LDY .fn_y		; Find end of file name
+		DEY
+		TYA
+		CLC
+		ADC #<.strbuf
+		STA .fptr
+		LDA #>.strbuf
+		STA .fptr+1
+		LDA # 0
+		TAY
+		STA (.fptr),Y		; Write EOS
+
+		LDA #<.strbuf+2
+		STA .fptr
+		LDA #>.strbuf+2
+		STA .fptr+1
+
+		LDY # 0			; Convert parameter to PETSCII fname
+.loop_convert	LDA (.fptr),Y
+		BEQ .convert_done
+		JSR screen_to_petscii
+		JSR to_upper_case
+		JSR petscii_to_screen
+		STA (.fptr),Y
+		INY
+		BNE .loop_convert
+.convert_done
+;------------------------------------------------------------------------------
+		; Call Toolbox load file function
+
+.load		LDA .to_addr_given
+		BEQ .skip_load_addr
+		LDA .addr
+		PHA
+		LDA .addr+1
+		PHA
+.skip_load_addr	LDA #<.strbuf+2
+		PHA
+		LDA #>.strbuf+2
+		PHA
+		LDA dos_device
+		PHA
+		LDA .to_addr_given
+		BEQ .load_auto
+		JSR load_from_file
+		JMP .load_done
+.load_auto	JSR load_from_file_auto
+.load_done
+		JSR puts_newline
+!ifdef TB_DISK_ERROR {
+		JSR get_disk_error
+}
+		JSR puts
+
+		CLC
+		RTS
+
+
+;==============================================================================
+!zone ELFN_SAVE
+;==============================================================================
+
+	.addr		= $f7
+	.end		= $f9
+	.fn_y		= $fb
+	.fptr		= $fd
+	.strbuf		= TAPE_BUFFER
+
+.error		JMP line_show_error
+
+elfn_save
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_quoted
+		BCS .error
+
+.check_quot1	LDA .strbuf+1
+!convtab SCR {	CMP #'"' }
+		BEQ .check_quot2
+		LDY # 1
+		BNE .error		; Will always jump
+
+.check_quot2	LDA .strbuf-1,Y
+!convtab SCR {	CMP #'"' }
+		BEQ .check_fnlength
+		DEY
+		JMP .error
+
+.check_fnlength	STY .fn_y
+		CPY # 4
+		BCS .check_space
+		DEY
+		JMP .error
+
+.check_space	LDA .strbuf,Y
+!convtab SCR {	CMP #' ' }
+		BNE .error
+		INY
+
+		JSR line_expect_int8
+		BCS .error
+		STA dos_device
+
+		JSR line_expect_int16
+		BCS .error
+		STX .addr
+		STA .addr+1
+
+		JSR line_expect_int16
+		BCS .error
+		STX .end
+		STA .end+1
+;------------------------------------------------------------------------------
+.start_save	LDY .fn_y		; Find end of file name
+		DEY
+		TYA
+		CLC
+		ADC #<.strbuf
+		STA .fptr
+		LDA #>.strbuf
+		STA .fptr+1
+		LDA # 0
+		TAY
+		STA (.fptr),Y		; Write EOS
+
+		LDA #<.strbuf+2
+		STA .fptr
+		LDA #>.strbuf+2
+		STA .fptr+1
+
+		LDY # 0
+.loop_convert	LDA (.fptr),Y
+		BEQ .convert_done
+		JSR screen_to_petscii
+		JSR to_upper_case
+		JSR petscii_to_screen
+		STA (.fptr),Y
+		INY
+		BNE .loop_convert
+.convert_done
+;------------------------------------------------------------------------------
+.load		LDA .addr
+		PHA
+		LDA .addr+1
+		PHA
+		LDA .end
+		PHA
+		LDA .end+1
+		PHA
+		LDA #<.strbuf+2
+		PHA
+		LDA #>.strbuf+2
+		PHA
+		LDA dos_device
+		PHA
+		JSR save_to_file
+
+		JSR puts_newline
+!ifdef TB_DISK_ERROR {
+		JSR get_disk_error
+}
+		JSR puts
+
+		CLC
+		RTS
+
+;==============================================================================
+!eof

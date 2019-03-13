@@ -1,0 +1,205 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef DEBUG {
+
+
+!macro PRINT_C .char {
+		LDA #.char
+		JSR putc
+}
+
+!macro PRINT_S .string {
+		LDA #<.string
+		PHA
+		LDA #>.string
+		PHA
+		JSR puts
+}
+
+!macro PRINT_HEXBYTE .byte {
+		LDA #.byte
+		JSR puts_hexbyte
+}
+
+!macro PRINT_HEXWORD .word {
+		LDA #>.word
+		JSR puts_hexbyte
+		LDA #<.word
+		JSR puts_hexbyte
+}
+
+!macro PRINT_HEXWORDS .from, .to {
+		LDA #>.from
+		JSR puts_hexbyte
+		LDA #<.from
+		JSR puts_hexbyte
+
+		+PRINT_C '-'
+
+		LDA #>.to-1
+		JSR puts_hexbyte
+		LDA #<.to-1
+		JSR puts_hexbyte
+}
+
+!ifdef DEBUG_SYS_STATE {
+;==============================================================================
+!zone DEBUG_SYS_STATE
+;==============================================================================
+
+s_save_zp	!pet "save pages: ", 0
+s_omit_stack	!pet "omit stack: ", 0
+s_yes		!pet "yes", 0
+s_no		!pet "no", 0
+s_client_snapshot	!pet "client:  ", 0
+s_monitor_snapshot	!pet "  monitor: ", 0
+s_zp		!pet " zp      ", 0
+s_vic		!pet " vic     ", 0
+s_sid		!pet " sid1    ", 0
+s_cia		!pet " cia1    ", 0
+s_context	!pet " context ", 0
+s_tab		!pet "  ", 0
+
+
+	.cs = client_snapshot
+	.ms = monitor_snapshot
+
+debug_sys_state
+;------------------------------------------------------------------------------
+		+PRINT_C petscii_newline
+		+PRINT_S s_save_zp
+!ifdef SAVE_ZP {
+		+PRINT_S s_yes
+} else {
+	+PRINT_S s_no
+}
+	+PRINT_C ' '
+	+PRINT_C '('
+	+PRINT_HEXBYTE NR_ZERO_PAGES
+	+PRINT_C ')'
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_omit_stack
+!ifdef OMIT_STACK {
+	+PRINT_S s_yes
+} else {
+	+PRINT_S s_no
+}
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_client_snapshot
+	+PRINT_HEXWORDS .cs, .cs + snapshot_length
+
+	+PRINT_S s_monitor_snapshot
+	+PRINT_HEXWORDS .ms, .ms + snapshot_length
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_zp
+	+PRINT_HEXWORDS .cs + snoffs_zp, .cs + snoffs_vic
+	+PRINT_S s_tab
+	+PRINT_S s_zp
+	+PRINT_HEXWORDS .ms + snoffs_zp, .ms + snoffs_vic
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_vic
+	+PRINT_HEXWORDS .cs + snoffs_vic, .cs + snoffs_sid1
+	+PRINT_S s_tab
+	+PRINT_S s_vic
+	+PRINT_HEXWORDS .ms + snoffs_vic, .ms + snoffs_sid1
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_sid
+	+PRINT_HEXWORDS .cs + snoffs_sid1, .cs + snoffs_cia1
+	+PRINT_S s_tab
+	+PRINT_S s_sid
+	+PRINT_HEXWORDS .ms + snoffs_sid1, .ms + snoffs_cia1
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_cia
+	+PRINT_HEXWORDS .cs + snoffs_cia1, .cs + snoffs_context
+	+PRINT_S s_tab
+	+PRINT_S s_cia
+	+PRINT_HEXWORDS .ms + snoffs_cia1, .ms + snoffs_context
+	+PRINT_C petscii_newline
+
+	+PRINT_S s_context
+	+PRINT_HEXWORDS .cs + snoffs_context, .cs + snoffs_context + ctxrec_len
+	+PRINT_S s_tab
+	+PRINT_S s_context
+	+PRINT_HEXWORDS .ms + snoffs_context, .ms + snoffs_context + ctxrec_len
+
+		RTS
+}
+
+
+!ifdef DEBUG_FILESIZES {
+;==============================================================================
+!zone DEBUG_FILESIZES
+;==============================================================================
+
+.address_table	!word _F00, _F01, _F02, _F03, _F04, _F05, _F06, _F07
+		!word _F08, _F09, _F0a, _F0b, _F0c, _F0d, _F0e, _F0f
+		!word _F10, _F11, _F12, _F13, _F14, _F15, _F16, _F17
+		!word _F18, _F19
+		!word _Fstr, _Fdyn, heap, _FEND
+.address_table_end
+
+	.size = $f7
+
+debug_filesizes
+;------------------------------------------------------------------------------
+		LDY # 0
+.loop		TYA
+		LSR
+		JSR puts_hexbyte
+		LDA #':'
+		JSR putc
+
+		SEC
+		LDA .address_table+2,Y
+		SBC .address_table+0,Y
+		PHA
+		LDA .address_table+3,Y
+		SBC .address_table+1,Y
+		PHA
+
+		AND #$07
+		ASL
+		STA puts_color
+
+		PLA
+		JSR puts_hexbyte
+		PLA
+		JSR puts_hexbyte
+
+		LDA cramcolor_text
+		STA puts_color
+
+		LDA #' '
+		JSR putc
+
+		INY
+		INY
+
+		CPY #.address_table_end - .address_table - 2
+		BCC .loop
+
+		RTS
+}
+
+
+;==============================================================================
+!zone DEBUG_BREAK
+;==============================================================================
+
+debug_break
+;------------------------------------------------------------------------------
+		JSR call_get_key
+halt		RTS
+
+
+}
+;==============================================================================
+!eof

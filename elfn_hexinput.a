@@ -1,0 +1,91 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ELFN_HEXINPUT
+;==============================================================================
+
+	.rptr = $f7			; Shared with elfn_hexdump!
+	.buffer = heap
+
+.error		JMP line_show_error
+
+elfn_hexinput
+;==============================================================================
+		LDY # 1
+		JSR line_expect_int16	; Read start address
+		BCS .error		; If none, report error
+		STX .rptr
+		STA .rptr+1
+
+		JSR line_expect_empty	; Abort input, do not show next command
+		BCC .done
+;------------------------------------------------------------------------------
+		; Copy target RAM to buffer, in case not all 8 bytes were
+		; provided by the user, so we can write back 8 bytes safely
+
+		STY $02			; Save position in input string
+		LDY # 7			; Copy target area to buffer
+.loop_fetch	LDA (.rptr),Y
+		STA .buffer,Y
+		DEY
+		BPL .loop_fetch
+		LDY $02			; Retreive input string position
+;------------------------------------------------------------------------------
+		LDX # 0			; Read 1 to 8 bytes
+.loop_cmdstr	JSR line_expect_int8
+		BCS .error		; Not a byte
+		STA .buffer,X		; Write new byte to buffer
+		TXA
+		PHA
+		JSR line_expect_empty	; End of line?
+		BCC .not_8_bytes
+		PLA
+		TAX
+		INX
+		CPX # 8
+		BNE .loop_cmdstr
+		BEQ .store
+.not_8_bytes	PLA			; Clean up stack
+;------------------------------------------------------------------------------
+.store		LDY # 7			; Write 8 bytes to target memory
+.store_loop	LDA .buffer,Y
+		STA (.rptr),Y
+		DEY
+		BPL .store_loop
+;------------------------------------------------------------------------------
+		; Show command to enter another line
+
+		JSR goto_pos0
+		LDX .rptr
+		LDY .rptr+1
+		LDA #'m'
+		JSR call_elfn_single_param
+		JSR elfn_hexdump
+
+		; $f7 (.rptr) has been increased by elfn_hexdump for us!
+
+		LDA #':'
+		JSR putc
+
+		LDA .rptr+1		; Print address
+		JSR puts_hexbyte
+		LDA .rptr
+		JSR puts_hexbyte
+
+		LDA #' '
+		JSR putc
+
+		SEC			; Prevent newline
+		RTS
+
+;------------------------------------------------------------------------------
+.done		CLC			; Indicate no error, new line
+		RTS
+
+
+;==============================================================================
+!eof

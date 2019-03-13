@@ -1,0 +1,42 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+!to "../toolbox.asm", cbm
+!sl "../toolbox.sym"
+
+	TOOLBOX = 1	; For conditional assembly of SYS entry points
+
+
+;=============================================================================
+; MAIN
+;=============================================================================
+
+; BASIC SYS CALL VECTORS
+;-----------------------------------------------------------------------------
+*= $c000
+JMP sys_scroll_up	; SYS 49152,top,btm
+JMP sys_scroll_down	; SYS 49155,top,btm
+JMP sys_save_screen	; SYS 49158,bufadr
+JMP sys_load_screen	; SYS 49161,bufadr
+;;JMP sys_hex_dump	; SYS 49164,start,end
+NOP
+NOP
+RTS
+JMP sys_sector_read	; SYS 49167,drv,chn,dvc,trk,sec,bufaddr
+JMP sys_sector_write	; SYS 49170,drv,chn,dvc,trk,sec,bufaddr
+JMP sys_getkey		; SYS 49173:A=PEEK(780)
+
+
+; INCLUDE THE MODULES
+;-----------------------------------------------------------------------------
+
+	TOOLBOX = 1	; Build library for BASIC programmers
+
+!source "toolbox_conf.a"
+
+
+!pet "eof/toolbox"
+;=============================================================================
+!eof

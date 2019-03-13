@@ -1,0 +1,568 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone STEP_MODES
+;==============================================================================
+
+	STEPMODE_IDLE	= 0		; Client program not running
+	STEPMODE_RUN	= 1		; Don't step, call the program normally
+	STEPMODE_ONCE	= 2		; Return to monitor after single step
+					; and report watches
+	STEPMODE_TRACE	= 3		; Loop steps until breakpoint reached
+	STEPMODE_WATCH	= 4		; Loop and show watches on each step
+	STEPMODE_NMI	= $ff		; NMI triggered break
+
+
+;==============================================================================
+!zone INIT_INTERRUPT_HANDLERS
+;==============================================================================
+
+init_interrupt_handlers
+;------------------------------------------------------------------------------
+		SEI
+
+		LDA $0316		; Save old break handler address
+		STA orig_brk_vector
+		LDA $0317
+		STA orig_brk_vector+1
+
+		LDA #<custom_break_handler	; Install our handler
+		STA $0316
+		LDA #>custom_break_handler
+		STA $0317
+
+		LDA $0318		; Save original NMI vector
+		STA orig_nmi_vector
+		LDA $0319
+		STA orig_nmi_vector+1
+
+		LDA #<custom_nmi_handler	; Install our handler
+		STA $0318
+		LDA #>custom_nmi_handler
+		STA $0319
+
+		CLI
+		RTS
+
+
+exit_interrupt_handlers
+;------------------------------------------------------------------------------
+		SEI			; Restore original break handler vector
+
+		LDA orig_brk_vector
+		STA $0316
+		LDA orig_brk_vector+1
+		STA $0317
+
+		LDA orig_nmi_vector
+		STA $0318
+		LDA orig_nmi_vector+1
+		STA $0319
+
+		CLI
+		RTS
+
+
+;==============================================================================
+!zone INTERRUPT_HANDLERS
+;==============================================================================
+
+	.pcptr		= $f7
+	.stack_offs	= $105+2
+
+custom_nmi_handler
+;------------------------------------------------------------------------------
+; Returns control to the monitor
+
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		;BIT $dc0d		; Acknowledge NMI
+
+		LDA step_mode		; Are we running client code?
+		CMP #STEPMODE_IDLE
+		BNE .dont_ignore
+		JMP ignore_nmi		; No: Monitor UI active
+.dont_ignore
+		LDA .pcptr		; Save contents of the ZP pointer
+		PHA
+		LDA .pcptr+1
+		PHA
+
+		; Determine client PC
+		TSX			; Get stack pointer
+		LDA .stack_offs,X	; Get NMI return address from stack
+		STA .pcptr
+		LDA .stack_offs+1,X
+		STA .pcptr+1
+		CMP #$e0		; Don't attempt to set break point in
+		BCS .in_kernal		; KERNAL area, it is ROM and we store
+					; context snapshots in the RAM below.
+
+		; Create backup of instruction
+		LDA .pcptr		; Save client return address for the
+		STA step_brk_addr_a	; BRK handler
+		STA step_brk_addr_b
+		LDA .pcptr+1
+		STA step_brk_addr_a+1
+		STA step_brk_addr_b+1
+
+		LDY # 0
+		LDA (.pcptr),Y
+		STA step_opc_save_a0	; Back up the instruction
+		STA step_opc_save_b0
+		LDA # 0
+		STA (.pcptr),Y		; Replace it with a BRK
+
+		; Set breakpoint
+		INY
+		LDA (.pcptr),Y
+		STA step_opc_save_a1	; Back up the following instruction
+		STA step_opc_save_b1
+		LDA # 0
+		STA (.pcptr),Y		; Replace it with a BRK
+
+		LDA #STEPMODE_NMI	; Do not add offset for the BRK
+		STA step_mode
+
+.in_kernal	PLA			; Restore ZP contents
+		STA .pcptr+1
+		PLA
+		STA .pcptr
+
+		JMP ignore_nmi		; Restore registers and RTI
+
+
+custom_break_handler
+;------------------------------------------------------------------------------
+; A BRK instruction will trigger an IRQ. The kernal routine checks the break
+; bit and jumps here. Now we can change the run context:
+
+		TSX			; Get stack pointer
+		TXA
+
+		SEC			; Get IRQ return address from stack,
+		LDA $0105,X		; adjust for offset and save it to
+		SBC # 2			; the client context record
+		STA client_pc
+		LDA $0106,X
+		SBC # 0
+		STA client_pc+1
+
+		TXA			; Save .X
+		LDX client_pc		; Find out, if a BRK was "eaten" by IRQ
+		DEX			; In this case, client_pc(lo) will be
+		CPX step_brk_addr_a	; one larger than the stored address
+		BEQ .brk_was_eaten
+		CPX step_brk_addr_b
+		BNE .nothing_eaten
+.brk_was_eaten	STX client_pc		; Adjust client_pc to point to the
+		CPX #$ff		; real break point
+		BNE .nothing_eaten
+		DEC client_pc+1
+.nothing_eaten	TAX			; Restore .X
+;------------------------------------------------------------------------------
+return_to_monitor
+		LDA #<brk_return	; Restore monitor context by replacing
+		STA $0105,X		; return address on the stack to
+		LDA #>brk_return	;  elfn_go:brk_return
+		STA $0106,X
+ignore_nmi	PLA			; Restore registers
+		TAY
+		PLA
+		TAX
+		PLA
+
+		RTI			; End interrupt, returning to monitor
+
+
+;==============================================================================
+!zone CALL_CLIENT
+;==============================================================================
+; Checks, if we do a step or normal call. For a step, the opcode of the
+; instruction after the current one is stored in the client context record
+; and replaced by a BRK, then a JMP to the client's PC is performed, thus
+; executing exactly one instruction until the next BRK interrupt is triggered.
+;  custom_break_handler  catches the BRK and switches back to the monitor
+; context, returning to  elfn_go . The BRK is replaced by the original opcode
+; and control is handed back to the monitor UI.
+
+	.pcptr = $f7
+	.PLACEHOLDER = 0
+
+call_client
+;==============================================================================
+		LDA #STEPMODE_RUN	; Initially, client is called normally
+		STA step_mode
+		LDY # 1
+		JSR line_expect_int16	; Read jump address. If any provided,
+		BCS .single_step	; to the G command, we will run the
+		JSR puts_newline	; Leave the g command visible
+		JMP .save_address	; program normally, else we single step
+
+;------------------------------------------------------------------------------
+.single_step	; Single step: Create breakpoint(s)
+		; Replace instruction(s) after next one with BRKs. If IRQ and
+		; BRK happen at the same time, the IRQ will "eat" the BRK
+		; interrupt, so we place 2 consecutive BRK instructions per
+		; breakpoint to be safe:
+
+		LDX client_pc		; Load opcode of upcoming instruction
+		STX .pcptr
+		LDA client_pc+1
+		STA .pcptr+1
+		LDY # 0
+		LDA (.pcptr),Y		; Find length of instruction
+
+		JSR get_instruction_length
+		TAY
+
+		LDA (.pcptr),Y		; Load opcode of following instruction
+		STA step_opc_save_a0	; Back up the original opcode
+		LDA # 0
+		STA (.pcptr),Y		; Create breakpoint: write BRK opcode
+
+		CLC
+		TYA			; Add instruction length to address
+		ADC .pcptr
+		STA step_brk_addr_a	; Save the address of the break point
+		LDA .pcptr+1
+		ADC # 0
+		STA step_brk_addr_a+1
+
+		INY			; Place a second BRK for the case, IRQ
+		LDA (.pcptr),Y		; "eats" the first break interrupt
+		STA step_opc_save_a1
+		LDA # 0
+		STA (.pcptr),Y
+;==============================================================================
+		; Check, if JMP, JSR or branch instruction, create another BRK
+
+		LDY # 0
+
+		LDA (.pcptr),Y		; Load opcode of following instruction
+		STA $02
+		CMP #$4c		; JMP $hhll?
+		BEQ .target_abs
+		CMP #$20		; JSR $hhll?
+		BEQ .target_abs
+		CMP #$6c		; JMP ($hhll)?
+		BEQ .target_ind
+		AND #$1f
+		CMP #$10		; Bxx (branch)?
+		BEQ .target_rel
+
+.no_branch	LDA step_opc_save_a0	; Just copy the information for the
+		STA step_opc_save_b0	; first breakpoint, it will be restored
+		LDA step_opc_save_a1
+		STA step_opc_save_b1
+		LDA step_brk_addr_a	; twice to the same location. This may
+		STA step_brk_addr_b	; waste a few cycles, but makes the
+		LDA step_brk_addr_a+1	; code simpler
+		STA step_brk_addr_b+1
+		JMP .breakpoints_done
+;------------------------------------------------------------------------------
+		; The opcode is a jump, so we need to put a break point at the
+		; target address
+.target_ind
+.target_abs	INY			; Get the target address of the current
+		LDA (.pcptr),Y		; instruction
+		TAX
+		INY
+		LDA (.pcptr),Y
+
+		LDY $02			; Re-examine opcode
+		CPY #$6c		; JMP ($hhll)?
+		BNE .finalize		; Normal JMP $hhll, we are done
+
+		STX .pcptr		; Calculate effective target address
+		STA .pcptr+1		; for the indirect jump
+
+		LDY # 0			; Get the address, the target points to
+		LDA (.pcptr),Y
+		TAX
+		INY
+		LDA (.pcptr),Y
+		JMP .finalize
+
+;------------------------------------------------------------------------------
+; https://www.c64-wiki.com/wiki/Relative_addressing
+; If a branching instruction at address a has an offset argument of value F,
+; the destination address for the branch (if taken), is a + F + 2
+
+		; The opcode is a branch, so we need to place a break point
+		; at the target address of that branch
+
+.target_rel	INY			; Get the operand of the current opcode
+		LDA (.pcptr),Y
+		TAX
+		CLC
+		ADC .pcptr		; Add operand to address of instruction
+		STA .pcptr
+		LDA .pcptr+1
+		ADC # 0
+		STA .pcptr+1
+		TXA
+		BPL .skip_sub_256	; Branch to location above, subtract
+		DEC .pcptr+1		; $100 from target address
+.skip_sub_256	CLC
+		LDA .pcptr		; Add final offset of 2
+		ADC # 2
+		TAX
+		LDA .pcptr+1
+		ADC # 0
+;------------------------------------------------------------------------------
+		; Jump or branch instruction: Create alterantive break point
+		; at target address of the jump/branch:
+
+.finalize	STX step_brk_addr_b	; Save address in context record
+		STA step_brk_addr_b+1
+
+		STX .pcptr		; Get opcode at target address
+		STA .pcptr+1
+		LDY # 0
+		LDA (.pcptr),Y
+		STA step_opc_save_b0	; Back up the target opcode
+		TYA			; Load 0 = BRK
+		STA (.pcptr),Y		; Set break point
+
+		INY			; Save the second instruction
+		LDA (.pcptr),Y
+		STA step_opc_save_b1
+		LDA # 0			; Store another BRK instruction
+		STA (.pcptr),Y
+
+.breakpoints_done
+;------------------------------------------------------------------------------
+		LDA #STEPMODE_ONCE	; Set step mode flag
+		STA step_mode		; Remember to restore the instructions
+					; we just replaced with BRKs
+
+		LDX client_pc		; Since no target address was given to
+		LDA client_pc+1		; the G command, we use the PC from the
+					; client context record
+;==============================================================================
+		; Load client context
+
+.save_address	STX client_pc		; Save address given as parameter to
+		STA client_pc+1		; the "G" command
+;------------------------------------------------------------------------------
+!ifdef USE_CONTEXT {
+		JSR save_client_record
+
+		STA monitor_akku	; Copy CPU contents to context record,
+		STX monitor_xreg	; so saving machine state can take the
+		STY monitor_yreg	; snapshot
+		TSX
+		STX monitor_sptr
+		PHP
+		PLA
+		STA monitor_sreg
+		LDA $0314
+		STA monitor_irqv
+		LDA $0315
+		STA monitor_irqv+1
+		LDA $01
+		AND #%00000111
+		STA monitor_bank
+
+	!ifdef USE_IRQ {
+		JSR exit_raster_isr
+	}
+		JSR switch_to_client_context
+}
+!ifdef CONTEXT_HANDLE_IRQ {
+		SEI
+		LDA client_irqv
+		STA $0314
+		LDA client_irqv+1
+		STA $0315
+		CLI
+}
+		LDA $01
+		AND #%11111000
+		ORA client_bank
+		STA $01
+
+		LDX client_sptr
+		TXS
+		LDX client_xreg
+		LDY client_yreg
+		LDA client_sreg		; Get client status register..
+		PHA
+		LDA client_akku
+		PLP			; ..and move to CPU status register
+;==============================================================================
+		; Switch to client context
+
+switch_context	JMP (client_pc)
+
+		; The next BRK will finally get us here:
+;==============================================================================
+brk_return	PHP			; Save client context
+		STA client_akku
+		PLA
+		STA client_sreg
+		STX client_xreg
+		STY client_yreg
+		TSX
+		STX client_sptr
+		LDA $01
+		AND #%00000111
+		STA client_bank
+		LDA $0314
+		STA client_irqv
+		LDA $0315
+		STA client_irqv+1
+
+!ifdef USE_CONTEXT {
+		JSR switch_to_monitor_context
+	!ifdef USE_IRQ {
+		JSR init_raster_isr
+	}
+
+	!ifdef CONTEXT_HANDLE_IRQ {
+		SEI
+		LDA monitor_irqv
+		STA $0314
+		LDA monitor_irqv+1
+		STA $0315
+		CLI
+	}
+		LDA $01
+		AND #%11111000
+		ORA monitor_bank
+		STA $01
+
+		LDX monitor_sptr
+		TXS
+		LDX monitor_xreg
+		LDY monitor_yreg
+		LDA monitor_sreg	; Get monitor status register..
+		PHA
+		LDA monitor_akku
+		PLP			; ..and move to CPU status register
+}
+		LDA step_mode		; Did we sigle step?
+		CMP #STEPMODE_RUN
+		BEQ .skip_restore	; No: Don't try to remove break points
+;------------------------------------------------------------------------------
+		; Remove breakpoints: Restore opcode(s)
+
+		;LDA client_pc
+		;STA .pcptr
+		;LDA client_pc+1
+		;STA .pcptr+1
+
+		LDY # 0
+
+		LDA step_brk_addr_a
+		STA .pcptr
+		LDA step_brk_addr_a+1
+		STA .pcptr+1
+		LDA step_opc_save_a0	; Get opc, that was replaced by BRK
+		STA (.pcptr),Y		; Restore original opc
+		INY
+		LDA step_opc_save_a1	; Restore the second BRK location
+		STA (.pcptr),Y
+		DEY
+
+		LDA step_brk_addr_b
+		STA .pcptr
+		LDA step_brk_addr_b+1
+		STA .pcptr+1
+		LDA step_opc_save_b0	; Get opc, that was replaced by BRK
+		STA (.pcptr),Y		; Restore original opc
+		INY
+		LDA step_opc_save_b1	; Restore the second BRK location
+		STA (.pcptr),Y
+;------------------------------------------------------------------------------
+.skip_restore
+
+!ifdef AUTO_SKIP_BRK {
+		LDA step_mode		; User aborted STEPMODE_RUN?
+		CMP #STEPMODE_NMI
+		BEQ .skip_brk		; Yes: Don't increase PC
+
+		LDY # 0
+.check_brk	LDA (.pcptr),Y		; Skip a BRK instruction, so we do not
+		BNE .skip_brk		; stand still while stepping on it
+
+		INC client_pc
+		BNE .skip_inc
+		INC client_pc+1
+.skip_inc
+}
+!ifdef USE_CONTEXT {
+		JSR save_client_record	; Update snapshot
+}
+.skip_brk
+;------------------------------------------------------------------------------
+		;;LDA step_mode
+		;;CMP #STEPMODE_NMI
+		;;BEQ .skip_nmi_newline
+		;;JSR puts_newline	; Counteract the "move up" in show regs
+.skip_nmi_newline
+		LDA #STEPMODE_IDLE
+		STA step_mode
+
+		CLC			; Trigger newline
+		RTS
+
+
+;==============================================================================
+!zone ELFN_GO
+;==============================================================================
+
+elfn_go
+;------------------------------------------------------------------------------
+		JSR call_client
+
+		LDA direct_command
+		BNE .skip_registers
+
+!ifdef STEP_REGS_AFTER {
+	!ifdef STEP_REGS_COLOR {
+	    !ifdef USE_COLORS {
+		LDA puts_color
+		PHA
+	    }
+		LDA step_mode
+		CMP #STEPMODE_RUN
+		BEQ .skip_color
+
+		LDX # 0
+		LDY zp_crsr_row
+		DEY
+		JSR goto_xy
+
+	    !ifdef USE_COLORS {
+		LDA #cram_grey
+		STA puts_color
+	    }
+.skip_color
+	}
+		JSR puts_newline
+		JSR show_registers
+
+	!ifdef STEP_REGS_COLOR {
+	    !ifdef USE_COLORS {
+		PLA
+		STA puts_color
+	    }
+	}
+}
+.skip_registers
+		CLC
+		RTS
+
+
+;==============================================================================
+!eof

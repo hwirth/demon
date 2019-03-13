@@ -1,0 +1,103 @@
+--X
+syntax: ?<topic> [<sub-topic/page>]
+topics:
+mem  rom  asm  zp  xzp
+vic  sid  cia  kernal  basic
+a assemble     +,- ins/del  b bin dump
+d disassemble  f fill       g step/go
+i illegals     k key        l load
+m mem dump     r registers  s save
+t transfer     u relocate   w window
+* symbols      # to hex     $ to dec
+> direct       ?<opc>
+Xmain a
+a<addr> <instruction> assemble
+Xmain +
++<addr> <instruction> relocate+assemble
+Xmain -
+-<start> [<end>] del instruction/range
+Xmain b
+b<addr>        round addr, show sprite
+b<start> <end> one byte per line
+Xmain d
+d<from> [<to>] disassemble machine code
+Xmain f
+f<start> <end> <byte> [<byte>...]
+fill memory with pattern
+Xmain g
+g[<addr>] step or run
+Xmain i
+i[+/-] en/disable illegal opcodes
+Xmain k
+function keys
+k[<number> [<value>]] list/clear/set
+Xmain l
+l"<file name>" <device> [<to addr>]
+Xmain m
+m[<from> [<to>]] show hex dump
+Xmain r
+r    show registgers
+;... set values
+;<addr> set pc
+Xmain s
+s"<file name>" <device> <start> <end>
+Xmain t
+t<start> <end> <to> copy memory
+Xmain u
+u<start> <end> <to> relocate
+adjusts absolute addrs
+Xmain w
+w[<start> <end>} show/set workspace
+Xmain *
+*<addr> [<name>] del/set symbol
+*- del all symbols
+Xmain #
+#<decimal> convert value
+Xmain $
+$<hex byte/word> convert value
+Xmain >
+><instr> direct: execute immediately
+Xmem
+0000-00ff zero page
+0100-01ff stack
+0200-03ff ext. zero page
+0400-07ff video ram (text)
+0800-9fff basic ram
+a000-bfff basic rom
+c000-cfff custom asm ram
+d000-dfff i/o, char rom
+ d000-d02e vic
+ d400-d7ff sid
+ d800-ddff cia 1+2
+ d800-dbff color ram
+de00-dfff reserved f. expansions
+e000-ffff kernal rom
+Xrom
+01  a000-bfff d000-dfff e000-ffff
+--------------------------------------
+30  ram       ram       ram
+31  ram       charrom   ram
+32  ram       charrom   kernal
+33  basic     charrom   kernal
+34  ram       ram       ram
+35  ram       i/o       ram
+36  ram       i/o       kernal
+37  basic     i/o       kernal default
+Xasm
+?<opcode> show details
+O
+Xkernal
+Lkernal
+Xbasic
+Lbasic
+Xvic
+Lvic
+Xsid
+Lsid
+Xcia
+Lcia
+Xzp
+Lzp
+Xxzp
+Lxzp
+XX

@@ -1,0 +1,467 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+dos_device	!byte 8			; 8-11
+dos_drive	!byte 0			; 0-1, only applicable for dual drives
+
+
+!ifdef TB_DISK_COMMAND {
+;-----------------------------------------------------------------------------
+!zone DISK_COMMAND
+;-----------------------------------------------------------------------------
+
+	.sptr = $f7
+
+disk_command
+;-----------------------------------------------------------------------------
+		PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		PLA			; Get pointer to command string
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+;-----------------------------------------------------------------------------
+		LDY #$00		; Find length of command string
+.loop_len	LDA (.sptr),Y
+		BEQ .found_len
+		INY
+		BNE .loop_len		; Will always jump
+.found_len	TYA
+		LDX .sptr
+		LDY .sptr+1
+;-----------------------------------------------------------------------------
+		;LDA #$00
+		;LDX #$00
+		;LDY #$00
+		JSR $ffbd		; call SETNAM (no filename)
+
+		LDA #$0f		; file number 15
+		LDX dos_device		; default to device 8
+.skip		LDY #$0f		; secondary address 15
+		JSR $ffba		; call SETLFS
+
+		JSR $ffc0		; call OPEN
+		BCS .error		; if carry set, the file could not be opened
+
+;		LDX #$0f		; filenumber 15
+;		JSR $ffc9		; call CHKOUT (file 15 now used as output)
+;		LDY #$00
+;.loop		LDA (.sptr),Y		; get byte from command string
+;		BEQ .close		; EOS-marker reached? Done.
+;		JSR $ffd2		; call CHROUT (send byte through command channel)
+;		INY
+;		BNE .loop		; Will always jump
+
+.close
+		LDA #$0f		; filenumber 15
+		JSR $ffc3		; call CLOSE
+
+		JSR $ffcc		; call CLRCHN
+		RTS
+.error
+		; Akkumulator contains BASIC error code
+
+		; most likely errors:
+		; A = $05 (DEVICE NOT PRESENT)
+
+		;... error handling for open errors ...
+		JMP .close		; even if OPEN failed, the file has to be closed
+
+} ; TB_DISK_COMMAND
+
+
+!ifdef TB_DISK_ERROR {
+;-----------------------------------------------------------------------------
+!zone DISK_ERROR
+; OUT:	STACK	Pointer to string	JSR, PLA hi, PLA lo
+;-----------------------------------------------------------------------------
+
+	.strbuf = TAPE_BUFFER
+	.sptr	= $f7
+	.tptr   = $f9
+
+.sindex		!byte 0
+
+
+get_disk_error	;JSR save_zp_pointers
+
+		LDA #<.strbuf
+		STA .tptr
+		LDA #>.strbuf
+		STA .tptr+1
+
+		LDA #$00
+		STA .sindex
+		STA $90			; clear STATUS flags
+
+		LDA dos_device		; device number
+		JSR $ffb1		; call LISTEN
+		LDA #$6f		; secondary address 15 (command channel)
+		JSR $ff93		; call SECLSN (SECOND)
+		JSR $ffae		; call UNLSN
+		LDA $90			; get STATUS flags
+		BNE .devnp		; device not present
+
+		LDA dos_device		; device number
+		JSR $ffb4		; call TALK
+		LDA #$6f		; secondary address 15 (error channel)
+		JSR $Ff96		; call SECTLK (TKSA)
+
+.loop		LDA $90			; get STATUS flags
+		BNE .eof		; either EOF or error
+		JSR $ffa5		; call IECIN (get byte from IEC bus)
+		;;JSR $ffd2		; call CHROUT (print byte to screen)
+		;;JSR putc
+		CMP #$0d
+		BEQ .skip_cr
+		LDY .sindex
+		STA (.tptr),Y
+		INC .sindex
+.skip_cr
+		JMP .loop		; next byte
+
+.eof		JSR $ffab		; call UNTLK
+		LDY .sindex
+		LDA #$00
+		STA (.tptr),Y
+
+.exit		;JSR restore_zp_pointers
+
+		PLA			; Save return address
+		TAY
+		PLA
+		TAX
+
+		LDA .tptr		; Pass pointer to string
+		PHA
+		LDA .tptr+1
+		PHA
+
+		TXA			; Restore return address
+		PHA
+		TYA
+		PHA
+		RTS
+
+.devnp		;... device not present handling ...
+
+		LDA #<s_diskerr_dev1
+		STA .sptr
+		LDA #>s_diskerr_dev1
+		STA .sptr+1
+		;JSR puts
+
+		LDY #$ff
+.devnp_loop1	INY
+		LDA (.sptr),Y
+		STA (.tptr),Y
+		BNE .devnp_loop1
+		STY .sindex
+
+		LDA dos_device		; device number
+
+		JSR byte_to_str
+		STY $02
+		LDY .sindex
+.h		CMP #'0'
+		BEQ .t
+		STA (.tptr),Y
+		INY
+.t		TXA
+		CMP #'0'
+		BEQ .u
+		STA (.tptr),Y
+		INY
+.u		LDA $02
+		STA (.tptr),Y
+		INY
+
+		STY $02
+		CLC
+		LDA .tptr
+		ADC $02
+		STA .tptr
+		LDA .tptr+1
+		ADC #$00
+		STA .tptr+1
+
+		LDA #<s_diskerr_dev2
+		STA .sptr
+		LDA #>s_diskerr_dev2
+		STA .sptr+1
+
+		LDY #$ff
+.devnp_loop2	INY
+		LDA (.sptr),Y
+		STA (.tptr),Y
+		BNE .devnp_loop2
+
+		SEC
+		LDA .tptr
+		SBC $02
+		STA .tptr
+		LDA .tptr+1
+		SBC #$00
+		STA .tptr+1
+
+		JMP .exit
+
+} ; TB_DISK_ERROR
+
+
+!ifdef TB_SECTORS_PER_TRACK {
+;------------------------------------------------------------------------------
+!zone SECTORS_PER_TRACK
+;------------------------------------------------------------------------------
+sectors_per_track
+		CPX # 18
+		BCS ._18plus
+		LDA # 21
+		RTS
+
+._18plus	CPX # 25
+		BCS ._25plus
+		LDA # 19
+		RTS
+
+._25plus	CPX # 31
+		BCS ._31plus
+		LDA # 18
+		RTS
+
+._31plus	LDA # 17
+		RTS
+
+} ; TB_SECTORS_PER_TRACK
+
+
+!ifdef TB_SAVE_TO_FILE {
+;-----------------------------------------------------------------------------
+!zone SAVE_TO_FILE
+; IN:	STACK	Start and end address, device
+;		PHA fromlo, PHA fromhi, PHA tolo, PHA tohi,
+;		PHA namelo, PHA namehi, PHA devnr, JSR
+; OUT:	.A	Error code
+;-----------------------------------------------------------------------------
+.file_start	!byte 0,0
+.file_end	!byte 0,0
+.device_nr	!byte 0
+
+	.file_name = $f7
+
+save_to_file
+;-----------------------------------------------------------------------------
+		PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		PLA			; Get parameters
+		STA .device_nr
+		PLA
+		STA .file_name+1
+		PLA
+		STA .file_name
+		PLA
+		STA .file_end+1
+		PLA
+		STA .file_end
+		PLA
+		STA .file_start+1
+		PLA
+		STA .file_start
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+;-----------------------------------------------------------------------------
+		LDY #$ff
+.loop_findlen	INY
+		LDA (.file_name),Y
+		BNE .loop_findlen
+		TYA
+;-----------------------------------------------------------------------------
+		;LDA #fname_end-fname
+		LDX .file_name
+		LDY .file_name+1
+		JSR $ffbd		; SETNAM
+
+		LDA #$00
+		LDX .device_nr
+		LDY #$00
+		JSR $ffba		; SETLFS
+
+		LDA .file_start
+		STA $c1
+		LDA .file_start+1
+		STA $c2
+		LDX .file_end
+		LDY .file_end+1
+		LDA #$c1		; Start address located in $c1/$c2
+		JSR $ffd8		; Call SAVE
+		BCS .error		; Carry set: A load error has happened
+
+		LDA #$00		; Report no error
+		RTS
+;-----------------------------------------------------------------------------
+.error		; Akkumulator contains BASIC error code
+		;... error handling ...
+
+		RTS
+
+} ; TB_SAVE_TO_FILE
+
+
+!ifdef TB_LOAD_FROM_FILE {
+;-----------------------------------------------------------------------------
+!zone LOAD_FROM_FILE
+; IN:	STACK	Start and end address, device
+;		PHA tolo, PHA tohi, PHA namelo, PHA namehi, PHA devnr, JSR
+; OUT:	.A	Error code
+;-----------------------------------------------------------------------------
+.file_start	!byte 0,0
+.device_nr	!byte 0
+
+	.file_name = $f7
+
+load_from_file
+;-----------------------------------------------------------------------------
+		PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		PLA			; Get parameters
+		STA .device_nr
+		PLA
+		STA .file_name+1
+		PLA
+		STA .file_name
+		PLA
+		STA .file_start+1
+		PLA
+		STA .file_start
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+;-----------------------------------------------------------------------------
+		LDY #$ff
+.loop_findlen	INY
+		LDA (.file_name),Y
+		BNE .loop_findlen
+		TYA
+;-----------------------------------------------------------------------------
+		;LDA #fname_end-fname
+		LDX .file_name
+		LDY .file_name+1
+		JSR $ffbd		; SETNAM
+
+		LDA #$01
+		LDX .device_nr
+		LDY #$00		; $01 = load address in file, $00: new
+		JSR $ffba		; SETLFS
+
+		LDX .file_start
+		LDY .file_start+1
+		LDA #$00		; $00 = load to memory, not verify
+		JSR $ffd5		; Call LOAD
+		BCS .error		; Carry set: A load error has happened
+
+		LDA #$00		; Report no error
+		RTS
+;-----------------------------------------------------------------------------
+.error		; Akkumulator contains BASIC error code
+		;... error handling ...
+
+		RTS
+
+} ; TB_LOAD_FROM_FILE
+
+
+!ifdef TB_LOAD_FROM_FILE_AUTO {
+;-----------------------------------------------------------------------------
+!zone LOAD_FROM_FILE
+; IN:	STACK	Start address, device
+;		PHA namelo, PHA namehi, PHA devnr, JSR
+; OUT:	.A	Error code
+;-----------------------------------------------------------------------------
+.device_nr	!byte 0
+
+	.file_name = $f7
+
+load_from_file_auto
+;-----------------------------------------------------------------------------
+		PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		PLA			; Get parameters
+		STA .device_nr
+		PLA
+		STA .file_name+1
+		PLA
+		STA .file_name
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+;-----------------------------------------------------------------------------
+		LDY #$ff
+.loop_findlen	INY
+		LDA (.file_name),Y
+		BNE .loop_findlen
+		TYA
+;-----------------------------------------------------------------------------
+		;LDA #fname_end-fname
+		LDX .file_name
+		LDY .file_name+1
+		JSR $ffbd		; SETNAM
+
+		LDA #$01
+		LDX .device_nr
+		LDY #$01		; $01 = load address in file, $00: new
+		JSR $ffba		; SETLFS
+
+		LDA #$00		; $00 = load to memory, not verify
+		JSR $ffd5		; Call LOAD
+		BCS .error		; Carry set: A load error has happened
+
+		LDA #$00		; Report no error
+		RTS
+;-----------------------------------------------------------------------------
+.error		; Akkumulator contains BASIC error code
+		;... error handling ...
+
+} ; TB_LOAD_FROM_FILE_AUTO
+
+
+;==============================================================================
+; STRINGS
+;==============================================================================
+
+!ifdef TB_DISK_ERROR {
+s_diskerr_dev1	!pet "device ", 0
+s_diskerr_dev2	!pet " not found", 0
+}
+
+!ifdef TB_S_DOS_COMMAND {
+s_dos_command	!fill 40, $00			; Buffer for disk commands
+}
+
+;=============================================================================
+;EOF

@@ -1,0 +1,80 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ELFN_FILL
+;==============================================================================
+
+	.sptr = $f7			; Fill area start
+	.eptr = $f9
+	.plen = $fb
+	.pptr = TAPE_BUFFER
+
+.error		JMP line_show_error
+
+elfn_fill
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr
+		STA .sptr+1
+
+		JSR line_expect_int16
+		BCS .error
+		STX .eptr
+		STA .eptr+1
+
+		LDX # 0
+		JSR line_expect_int8
+		BCS .error
+		STA .pptr,X
+
+.param_loop	INX
+		JSR line_expect_empty
+		BCC .params_read
+		JSR line_expect_int8
+		BCS .error
+		STA .pptr,X
+		JMP .param_loop
+;------------------------------------------------------------------------------
+.params_read	STX .plen		; Store pattern length
+
+		LDY .sptr
+		LDA # 0
+		STA .sptr		; Low byte now in .Y
+
+		LDX # 0			; Start with first byte of pattern
+.fill_loop	LDA .pptr,X
+		STA (.sptr),Y
+		INY			; Select next target location
+		BNE .skip_t_hi		; Overflow (.Y = 0)?
+		INC .sptr+1		; Yes: Select next page
+.skip_t_hi
+		LDA .sptr+1		; Check, if end reached
+		CMP .eptr+1
+		BEQ .check_end_lo	; tptr hi = eptr hi: Check low byte
+		BCC .continue		; tptr hi < eptr hi: Not at end yet
+		BCS .done		; tptr hi > eptr hi: Beyond end
+
+.check_end_lo	CPY .eptr
+		BCC .continue		; tptr lo < eptr lo: Not at end yet
+		BEQ .continue		; tptr lo = eptr lo: Last byte
+		BCS .done		; tptr lo > eptr lo: Beyond end
+
+.continue	INX			; Select next byte of pattern
+		CPX .plen		; Warp around
+		BCC .fill_loop		; .X < pattern length
+		LDX # 0			; .X >= pattern length; Restart pattern
+		BEQ .fill_loop		; Will always jump
+
+;------------------------------------------------------------------------------
+.done		CLC			; Trigger newline
+		RTS
+
+
+;==============================================================================
+!eof

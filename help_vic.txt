@@ -1,0 +1,66 @@
+--X
+pages: 3
+back: ??
+X?
+Lmain
+Xvic 1
+d000,d001 sprite 0: x, y
+d002-d00f 1-7: x,y
+d010 sprites 0-7: x, bit 8
+d011
+ bit 7: raster line bit 8
+ bit 6: ext. color mode
+ bit 5: bitmap mode
+ bit 4: image output enabled
+ bit 3: set: 25 lines, else 24
+ bit 2..0: offset top in raster lines
+d012
+ read: current raster line
+ write: raster line irq trigger
+d013,d014 lightpen x, y
+d015 sprites 0-7: enable
+d016
+ bit 7..5: not used
+ bit 4: multicolor mode
+ bit 3: set: 40 columns, else 38
+ bit 2..0: pixel offset left
+Xvic 2
+d017 sprites 0-7: height*2
+d018 mem control
+ bit 7..4: base adrr vram 64*[7..4]
+ bit 3..1: base addr crom 1024*[3..1]
+bitmap mode:
+ bit 3: base addr bmap 8192*[3]
+ bit 0 always 1
+  crom only in bank 0 and 2 at 1000
+d019 irq (set = on)
+ read
+ bit 7: irq by vic
+ bit 6..4: not used
+ bit 3: by light pen
+ bit 2: s-s collision
+ bit 1: sprite-background
+ bit 0: raster beam
+ write: clear irq flag
+Xvic 3
+d01a irq mask
+ bit 7..4: not used
+ bit 3: light pen
+ bit 2: s-s-collision
+ bit 1: s-background
+ bit 0: raster beam
+d01b sprites 0-7: priority background
+d01c sprites 0-7: mode multicolor
+d01d sprites 0-7: width*2
+d01e sprites info: set: s-s collision
+d01f sprites info: set: s-bgnd coll.
+d020 frame color
+d021 background color
+d022 ext. color: bgnd 1
+d023 ext. color: bgnd 2
+d024 ext. color: bgnd 3
+d025 multicolor sprite: color 0 (%01)
+d026 multicolor sprite: color 1 (%11)
+d027 sprite 0 color (%10)
+d028-d02e sprites 1-7: color
+XX

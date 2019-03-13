@@ -1,0 +1,977 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef USE_CONTEXT {
+
+
+;==============================================================================
+!zone SNAPSHOT_LAYOUT
+;==============================================================================
+
+; Snapshot record layout
+;------------------------------------------------------------------------------
+	nrr_VIC	= $31			; Number of I/O registers per chip
+	nrr_SID	= $29
+	nrr_CIA	= $10
+;------------------------------------------------------------------------------
+!ifdef CONTEXT_SAVE_SCREEN {
+	snoffs_vram	= 0		; Typically $0400..$07ff
+	snoffs_cram	= 1000		; $d800..$dfff
+	snoffs_zp	= 2000		; $0000..$03ff
+} else {
+	snoffs_zp	= 0
+}
+	.post_zp	= snoffs_zp + NR_ZERO_PAGES*$100
+
+!ifdef CONTEXT_SAVE_CHIPS {
+	snoffs_vic	= .post_zp	; $d000..$d02e
+	.post_vic	= snoffs_vic + nrr_VIC
+
+	snoffs_sid1	= .post_vic	; $d400..$d428, $d040..$d05f (Stereo)
+	snoffs_sid2	= .post_vic + nrr_SID
+	.post_sid	= snoffs_sid1 + 2*nrr_SID
+
+	snoffs_cia1	= .post_sid	; $dc00..dc0f, $dd00..$dd0f
+	snoffs_cia2	= .post_sid + nrr_CIA
+	.post_cia	= snoffs_cia1 + 2*nrr_CIA
+
+	snoffs_context	= .post_cia
+} else {
+	snoffs_context	= .post_zp
+}
+	ctxrec_len = (client_ctxrec_end - client_ctxrec)
+;------------------------------------------------------------------------------
+	snapshot_length	= (snoffs_context + ctxrec_len)
+
+	client_snapshot		= $e000
+	monitor_snapshot	= $e000 + snapshot_length
+
+
+;==============================================================================
+!zone CONTEXT_AND_SNAPSHOT_ADDRESSES
+;==============================================================================
+
+; Offsets into context record
+;------------------------------------------------------------------------------
+	.cr	= client_ctxrec
+	croffs_pc	= client_pc   - .cr
+	croffs_irqv	= client_irqv - .cr
+	;croffs_nmiv	= client_nmiv - .cr
+	croffs_bank	= client_bank - .cr
+	croffs_sptr	= client_sptr - .cr
+	croffs_akku	= client_akku - .cr
+	croffs_xreg	= client_xreg - .cr
+	croffs_yreg	= client_yreg - .cr
+	croffs_sreg	= client_sreg - .cr
+
+
+; Addresses in snapshot
+;------------------------------------------------------------------------------
+	.cc = client_snapshot + snoffs_context
+	cs_pc	= .cc + croffs_pc
+	cs_irqv	= .cc + croffs_irqv
+	;cs_nmiv	= .cs + croffs_nmiv
+	cs_bank	= .cc + croffs_bank
+	cs_sptr	= .cc + croffs_sptr
+	cs_akku	= .cc + croffs_akku
+	cs_xreg	= .cc + croffs_xreg
+	cs_yreg	= .cc + croffs_yreg
+	cs_sreg	= .cc + croffs_sreg
+	cs_stack = client_snapshot + snoffs_zp + $100
+!ifdef CONTEXT_SAVE_CHIPS {
+	cs_vic	= client_snapshot + snoffs_vic
+	cs_sid1	= client_snapshot + snoffs_sid1
+	cs_sid2	= client_snapshot + snoffs_sid2
+	cs_cia1	= client_snapshot + snoffs_cia1
+	cs_cia2	= client_snapshot + snoffs_cia2
+}
+	.mc = monitor_snapshot + snoffs_context
+	ms_pc	= .mc + croffs_pc
+	ms_irqv	= .mc + croffs_irqv
+	;ms_nmiv	= .mc + croffs_nmiv
+	ms_bank	= .mc + croffs_bank
+	ms_sptr	= .mc + croffs_sptr
+	ms_akku	= .mc + croffs_akku
+	ms_xreg	= .mc + croffs_xreg
+	ms_yreg	= .mc + croffs_yreg
+	ms_sreg	= .mc + croffs_sreg
+	ms_stack = monitor_snapshot + snoffs_zp + $100
+!ifdef CONTEXT_SAVE_CHIPS {
+	ms_vic	= monitor_snapshot + snoffs_vic
+	ms_sid1	= monitor_snapshot + snoffs_sid1
+	ms_sid2	= monitor_snapshot + snoffs_sid2
+	ms_cia1	= monitor_snapshot + snoffs_cia1
+	ms_cia2	= monitor_snapshot + snoffs_cia2
+}
+
+;==============================================================================
+!zone EN_DISABLE_ROMS
+;==============================================================================
+
+.catch_all_isr_template
+;------------------------------------------------------------------------------
+		PHA
+		LDA $01			; Processor port
+		PHA			; Back up ROM visibiliy
+
+		ORA #ROM_MASK_RAM_IO_RAM; Disable BASIC and KERNAL ROM, so we
+		STA $01			; can reach the hardware via I/O $Dxxx
+
+		LDA #$ff
+		STA $d019		; Acknowledge VIC IRQs
+
+		BIT $dc0d		; Acknowlege IRQs
+		BIT $dd0d		; Acknowlege NMI
+
+		;INC $d020		; Change border color
+		;INC $d021		; Change background color
+		;INC $0400		; Change char in top left corner
+
+		PLA			; Restore ROM visibility
+		STA $01
+		PLA
+		RTI
+;------------------------------------------------------------------------------
+.catch_all_isr_template_end
+
+	.cai_begin = .catch_all_isr_template
+	.cai_end   = .catch_all_isr_template_end
+	.catch_all_isr_length	= .cai_end - .cai_begin
+
+	.catch_all_isr_address	= $fffa - .catch_all_isr_length
+
+
+
+.create_catch_all_isr
+;------------------------------------------------------------------------------
+		; Copy the ISR template just below the IRQ vector table
+
+		LDY #.catch_all_isr_length - 1
+.loop_create	LDA .catch_all_isr_template,Y
+		STA .catch_all_isr_address,Y
+		DEY
+		BPL .loop_create
+
+		LDA #<.catch_all_isr_address	; Let all vectors point to our
+		STA $fffa		; NMI,	; ISR
+		STA $fffc		; RESET,
+		STA $fffe		; IRQ low bytes
+
+		LDA #>.catch_all_isr_address
+		STA $fffb		; NMI,
+		STA $fffd		; RESET,
+		STA $ffff		; IRQ high bytes
+
+		RTS
+
+
+disable_roms
+;------------------------------------------------------------------------------
+		JSR .create_catch_all_isr	; Create catch-all ISR at $ffee,
+						; let point all 3 vectors to it
+
+		LDA $01				; Processor port
+		AND #%00000111			; Keep only ROM visibility bits
+		STA prev_rom_config		; Save for restoring later
+
+		LDA $01				; Processor port
+		AND #%11111000			; Remove ROM visibility bits
+		ORA #ROM_MASK_RAM_IO_RAM	; Enable full RAM access
+		STA $01
+
+		RTS
+
+
+restore_roms
+;------------------------------------------------------------------------------
+		LDA $01				; Processor port
+		AND #%11111000			; Clear ROM visibility bits
+		ORA prev_rom_config		; Restore configuration
+		STA $01
+
+		RTS
+
+
+enable_roms
+;------------------------------------------------------------------------------
+		LDA #ROM_MASK_BASIC_IO_KERNAL
+		STA $01
+
+		RTS
+
+
+;==============================================================================
+!zone LOAD_SAVE_CONTEXT_RECORD
+;==============================================================================
+
+	.sptr	= $f7
+	.rptr	= $f9
+	.raddr	= $fb
+
+load_context_record
+;------------------------------------------------------------------------------
+; IN:	Stack	int16, int16	Snapshot address, context record address
+
+		PLA
+		STA .raddr
+		PLA
+		STA .raddr+1
+
+		PLA				; Save context record address
+		STA .rptr+1
+		PLA
+		STA .rptr
+		PLA				; Save snapshot address
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		LDA .raddr+1
+		PHA
+		LDA .raddr
+		PHA
+
+		CLC				; Add offset to context data
+		LDA .sptr
+		ADC #<snoffs_context
+		STA .sptr
+		LDA .sptr+1
+		ADC #>snoffs_context
+		STA .sptr+1
+
+		LDA $01				; Save ROM visibility setting
+		PHA
+		AND #%11111000
+		ORA #ROM_MASK_RAM_IO_RAM	; Disable BASIC and KERNAL ROM
+
+		LDY #ctxrec_len-1
+.loop_load	LDA (.sptr),Y			; Load from snapshot
+		STA (.rptr),Y			; Save to context record
+		DEY
+		BPL .loop_load
+
+		PLA				; Restore ROM visibility
+		STA $01
+
+		LDY #croffs_sptr
+		LDA (.sptr),Y			; Return stack pointer
+
+		RTS
+
+
+save_context_record
+;------------------------------------------------------------------------------
+; IN:	Stack	int16, int16	Snapshot address, context record address
+
+		PLA
+		STA .raddr
+		PLA		;; use .X, .Y
+		STA .raddr+1
+
+		PLA				; Save context record address
+		STA .rptr+1
+		PLA
+		STA .rptr
+		PLA				; Save snapshot address
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		LDA .raddr+1
+		PHA
+		LDA .raddr
+		PHA
+
+		CLC				; Add offset to context data
+		LDA .sptr
+		ADC #<snoffs_context
+		STA .sptr
+		LDA .sptr+1
+		ADC #>snoffs_context
+		STA .sptr+1
+
+		LDA $01				; Save ROM visibility setting
+		PHA
+		AND #%11111000
+		ORA #ROM_MASK_RAM_IO_RAM	; Disable BASIC and KERNAL ROM
+		STA $01
+
+		LDY #ctxrec_len-1
+.loop_save	LDA (.rptr),Y			; Load from context record
+		STA (.sptr),Y			; Save to snapshot
+		DEY
+		BPL .loop_save
+
+		PLA				; Restore ROM visibility
+		STA $01
+
+		RTS
+
+
+save_client_record
+;------------------------------------------------------------------------------
+		JSR save_zp_pointers
+
+		LDA #<client_snapshot
+		PHA
+		LDA #>client_snapshot
+		PHA
+		LDA #<client_ctxrec
+		PHA
+		LDA #>client_ctxrec
+		PHA
+
+		JSR save_context_record
+		JSR restore_zp_pointers
+		RTS
+
+
+load_client_record
+;------------------------------------------------------------------------------
+		JSR save_zp_pointers
+
+		LDA #<client_snapshot
+		PHA
+		LDA #>client_snapshot
+		PHA
+		LDA #<client_ctxrec
+		PHA
+		LDA #>client_ctxrec
+		PHA
+
+		JSR load_context_record
+		JSR restore_zp_pointers
+		RTS
+
+
+;==============================================================================
+!zone SAVE_RESTORE_ZP_BACKUP
+;==============================================================================
+; Save/restore ZP pointers $f7..$ff
+
+sr_zp_save
+;------------------------------------------------------------------------------
+		LDX # 8
+.loop_zp_save	LDA $f7,X
+		STA sr_zp_backup,X
+		DEX
+		BPL .loop_zp_save
+		RTS
+
+
+sr_zp_restore
+;------------------------------------------------------------------------------
+		LDX # 8
+.loop_zp_load	LDA sr_zp_backup,X
+		STA $f7,X
+		DEX
+		BPL .loop_zp_load
+		RTS
+
+
+;==============================================================================
+!zone SAVE_RESTORE_SYSTEM_STATE
+;==============================================================================
+
+	.sn_ptr	= $f7
+	.sptr	= $f9
+	.tptr	= $fb
+
+	.PLACEHOLDER = 0
+
+save_system_state
+;==============================================================================
+; IN:	.X/.A	uint16	Location to store system information to
+
+		SEI
+
+		STX .sn_ptr		; Remember start address of snapshot
+		STA .sn_ptr+1
+
+		JSR disable_roms	; Enable access to $E000-$FFFF
+
+		PLA			; Keep return address, ..
+		STA switch_raddrs
+		PLA
+		STA switch_raddrs+1
+		PLA
+		STA switch_raddrs+2	; .. and return address of caller,
+		PLA			; since we are switching stacks
+		STA switch_raddrs+3
+
+!ifdef WORK_SCREEN {
+	!ifdef CONTEXT_SAVE_SCREEN {
+		LDA .sn_ptr
+		PHA
+		LDA .sn_ptr+1
+		PHA
+		JSR call_save_screen
+	}
+}
+;------------------------------------------------------------------------------
+b_sss1		; Save context record to snapshot
+
+		JSR save_zp_pointers
+		JSR save_zp_pointers
+
+		LDA .sn_ptr
+		PHA
+		LDA .sn_ptr+1
+		PHA
+
+		LDA .sn_ptr+1
+		CMP #>client_snapshot
+		BNE .save_client
+.save_monitor	LDA #<monitor_ctxrec
+		PHA
+		LDA #>monitor_ctxrec
+		PHA
+		JMP .save_record
+
+.save_client	LDA #<client_ctxrec
+		PHA
+		LDA #>client_ctxrec
+		PHA
+
+.save_record	JSR save_context_record
+
+		JSR restore_zp_pointers
+;------------------------------------------------------------------------------
+b_sss2		; Save registers of VIC, SIDs, CIAs
+
+!ifdef CONTEXT_SAVE_CHIPS {
+		CLC
+		LDA .sn_ptr		; Move write pointer behind screen
+		ADC #<snoffs_vic	; backup
+		STA .tptr
+		LDA .sn_ptr+1
+		ADC #>snoffs_vic
+		STA .tptr+1
+
+		LDY #nrr_VIC
+
+.sloop_vic	LDA VIC,Y
+.svic_sta	STA (.tptr),Y
+		DEY
+		BPL .sloop_vic
+
+		;; SID
+		;; CIA
+}
+;------------------------------------------------------------------------------
+b_sss3		; Save ZP, stack and XZP to snapshot
+
+!ifdef SAVE_ZP {
+		CLC			; Target ptr to snapshot zp data
+		LDA .sn_ptr
+		ADC #<snoffs_zp
+		STA .tptr
+		LDA .sn_ptr+1
+		STA switch_sptr		; Remember for saving the stack pointer
+		ADC #>snoffs_zp
+		STA .tptr+1
+
+		LDX # 0			; Loop counter
+		STX .sptr		; Source pointer to ZP
+		STX .sptr+1
+
+		LDY #$02		; Don't save $0000 and $0001
+.sloop_zp	LDA (.sptr),Y
+		STA (.tptr),Y
+		INY
+		BNE .sloop_zp
+.sskip_stack	INC .sptr+1		; Increment pointer high bytes
+		INC .tptr+1
+		INX
+	!ifdef OMIT_STACK {
+		CPX # 1
+		BEQ .rskip_stack
+	}
+		CPX #NR_ZERO_PAGES
+		BCC .sloop_zp
+}
+;------------------------------------------------------------------------------
+b_sss4		JSR restore_zp_pointers
+
+		TSX			; Get stack pointer
+		LDA switch_sptr
+		CMP #>monitor_snapshot
+		BEQ .save_mstack
+.save_cstack	STX cs_sptr		; Save stack pointer to snapshot
+		JMP .save_stack_done
+.save_mstack	STX ms_sptr		; Save stack pointer to snapshot
+.save_stack_done
+
+		JSR restore_roms
+
+		LDA switch_raddrs+3
+		PHA
+		LDA switch_raddrs+2
+		PHA
+		LDA switch_raddrs+1
+		PHA
+		LDA switch_raddrs
+		PHA
+
+		CLI
+		RTS
+
+
+restore_system_state
+;==============================================================================
+; IN:	.X/.A	uint16	Location to restore system information from
+
+		SEI
+
+		STX .sn_ptr		; Remember start address of snapshot
+		STA .sn_ptr+1
+
+		JSR disable_roms
+
+		PLA			; Keep return address, ..
+		STA switch_raddrs
+		PLA
+		STA switch_raddrs+1
+		PLA
+		STA switch_raddrs+2	; .. and return address of caller,
+		PLA			; since we are switching stacks
+		STA switch_raddrs+3
+
+;------------------------------------------------------------------------------
+		; Restore VIC, SID, CIA configuration
+
+!ifdef CONTEXT_SAVE_CHIPS {
+		CLC
+		LDA .sn_ptr		; Move read pointer behind screen
+		ADC #<snoffs_vic	; backup
+		STA .sptr
+		LDA .sn_ptr+1
+		ADC #>snoffs_vic
+		STA .sptr+1
+
+		LDY #nrr_VIC
+.rloop_vic	LDA (.sptr),Y
+		STA VIC,Y
+		DEY
+		BPL .rloop_vic
+
+		;; SID
+		;; CIA
+}
+!ifdef WORK_SCREEN {
+	!ifdef CONTEXT_SAVE_SCREEN {
+		LDA .sn_ptr
+		PHA
+		LDA .sn_ptr+1
+		PHA
+		JSR call_load_screen
+	}
+}
+;------------------------------------------------------------------------------
+b_rss1		; Load context record from snapshot
+
+		JSR save_zp_pointers
+
+		LDA .sn_ptr
+		PHA
+		LDA .sn_ptr+1
+		PHA
+
+		LDA .sn_ptr+1
+		CMP #>client_snapshot
+		BEQ .load_client
+.load_monitor	LDA #<monitor_ctxrec
+		PHA
+		LDA #>monitor_ctxrec
+		PHA
+		JMP .load_record
+
+.load_client	LDA #<client_ctxrec
+		PHA
+		LDA #>client_ctxrec
+		PHA
+.load_record	JSR load_context_record		; Returns stack pointer in .A
+b_rss2		STA switch_sptr
+
+		JSR restore_zp_pointers
+
+		LDX switch_sptr
+		TXS				; Save stack pointer to CPU
+;------------------------------------------------------------------------------
+b_rss3		; Load ZP, stack and XZP from snapshot
+
+!ifdef SAVE_ZP {
+		CLC			; Source ptr to snapshot zp data
+		LDA .sn_ptr
+		ADC #<snoffs_zp
+		STA .zp_lda+1
+		LDA .sn_ptr+1
+		ADC #>snoffs_zp
+		STA .zp_lda+2
+
+		LDX # 0			; Loop counter
+		STX .zp_sta+1		; Target pointer to ZP
+		STX .zp_sta+2
+
+		LDY #$02		; Don't restore $0000 and $0001
+.rloop_zp
+.zp_lda		LDA .PLACEHOLDER,Y
+.zp_sta		STA .PLACEHOLDER,Y
+		INY
+		BNE .rloop_zp
+.rskip_stack	INC .zp_lda+2		; Increment pointer high bytes
+		INC .zp_sta+2
+		INX
+	!ifdef OMIT_STACK {
+		CPX # 1
+		BEQ .rskip_stack
+	}
+		CPX #NR_ZERO_PAGES
+		BCC .rloop_zp
+}
+;------------------------------------------------------------------------------
+b_rss4		JSR restore_roms
+
+		LDA switch_raddrs+3
+		PHA
+		LDA switch_raddrs+2
+		PHA
+		LDA switch_raddrs+1
+		PHA
+		LDA switch_raddrs
+		PHA
+
+		CLI
+		RTS
+
+
+;==============================================================================
+!zone LOAD_CONTEXT
+;==============================================================================
+
+switch_to_client_context
+;==============================================================================
+		; Switch to client context
+
+		SEI
+
+		LDA #>load_client_context-1
+		PHA
+		LDA #<load_client_context-1
+		PHA
+
+		LDX #<monitor_snapshot
+		LDA #>monitor_snapshot
+		JMP save_system_state		; "virtual" JSR
+		; Continued in load_client_context
+
+load_client_context
+;------------------------------------------------------------------------------
+		;JSR exit_interrupt_handlers
+!ifdef USE_IRQ	;JSR exit_raster_isr
+
+		LDA #>.client_cont-1
+		PHA
+		LDA #<.client_cont-1
+		PHA
+
+		LDX #<client_snapshot
+		LDA #>client_snapshot
+		JMP restore_system_state	; "virtual" JSR
+
+.client_cont	LDA $01
+		AND #%11111000
+		ORA #ROM_MASK_BASIC_IO_KERNAL
+		STA $01
+
+		RTS
+
+
+switch_to_monitor_context
+;==============================================================================
+		; Switch to monitor context
+
+		LDA #>load_monitor_context-1
+		PHA
+		LDA #<load_monitor_context-1
+		PHA
+
+		LDX #<client_snapshot
+		LDA #>client_snapshot
+		JMP save_system_state		; "virtual" JSR
+		; Continued in load_monitor_context
+
+load_monitor_context
+;------------------------------------------------------------------------------
+		LDA #>.monitor_cont-1
+		PHA
+		LDA #<.monitor_cont-1
+		PHA
+
+		LDX #<monitor_snapshot
+		LDA #>monitor_snapshot
+		JMP restore_system_state
+
+.monitor_cont	LDA $01
+		AND #%11111000
+		ORA #ROM_MASK_RAM_IO_KERNAL
+		STA $01
+
+!ifdef USE_IRQ	;JSR init_raster_isr
+		;JSR init_interrupt_handlers
+
+		RTS
+
+
+;==============================================================================
+!zone ACKNOWLEDGE_ALL_IRQS
+;==============================================================================
+
+acknowledge_all_irqs
+;------------------------------------------------------------------------------
+		LDA #$00
+		;STA $dc0e
+		;STA $dc0f
+		STA $dd0e
+		STA $dd0f
+
+		BIT $d019
+		BIT $dc0d
+		BIT $dd0d
+		RTS
+
+
+;==============================================================================
+!zone INIT_CLIENT_SNAPSHOT
+;==============================================================================
+
+init_client_snapshot
+;==============================================================================
+		LDX #<client_snapshot
+		LDA #>client_snapshot
+		JSR save_system_state	; Mainly get VRAM and CRAM into ss
+
+		SEI
+		JSR disable_roms
+;------------------------------------------------------------------------------
+		;LDA #<client_snapshot
+		;PHA
+		;LDA #>client_snapshot
+		;PHA
+		;JSR call_save_screen
+
+		LDA #<heap
+		STA cs_pc
+		LDA #>heap
+		STA cs_pc+1
+
+		LDA $0314
+		STA cs_irqv
+		LDA $0315
+		STA cs_irqv+1
+
+		LDA #ROM_MASK_BASIC_IO_KERNAL
+		STA cs_bank
+;------------------------------------------------------------------------------
+		; Prepare CPU
+
+		LDA # 0
+		STA cs_akku
+		STA cs_xreg
+		STA cs_yreg
+
+		LDA #%00000000
+		STA cs_sreg
+;------------------------------------------------------------------------------
+		; Clear stack
+
+!ifndef OMIT_STACK {
+		LDA #$ff
+		STA cs_sptr
+
+		LDA # 0
+		TAY
+.loop_stack	STA cs_stack,Y
+		INY
+		BNE .loop_stack
+;------------------------------------------------------------------------------
+		; Prepare initial stack values
+
+		LDA #>monitor_panic
+		DEC cs_sptr
+		STA cs_stack+$ff
+
+		LDA #<monitor_panic
+		DEC cs_sptr
+		STA cs_stack+$fe
+}
+		JSR load_client_record		; Clears IRQ flag
+
+		JSR restore_roms
+		;CLI
+		RTS
+
+
+;==============================================================================
+!zone MONITOR_PANIC
+;==============================================================================
+
+	.c_backgnd	= cram_black
+	.c_title	= cram_yellow
+	.c_bright	= cram_white
+	.c_dark		= cram_lgrey
+
+monitor_panic
+;------------------------------------------------------------------------------
+		SEI
+
+		JSR enable_roms
+		JSR exit_interrupt_handlers
+	!ifdef USE_IRQ {
+		JSR exit_raster_isr
+	}
+
+		LDA #%00011011		; Picture enabled, 25 lines
+		STA $d011
+		LDA #%00001000		; 40 columns
+		STA $d016
+		LDA #%00010101		; VRAM $0400, CRAM $
+		STA $d018
+		LDA #%00000000		; IRQs off
+		STA $d019
+		STA $d02a
+
+		LDA #scroll_mode_none
+		STA puts_scroll_mode
+		LDA #$00
+		STA puts_rvs_flag
+
+		LDA # 0
+		STA scroll_top
+		STA scroll_left
+		LDA # 39
+		STA scroll_right
+		LDA # 24
+		STA scroll_bottom
+		JSR menu_clr_home
+
+		LDA #.c_backgnd
+		STA $d020
+		STA $d021
+
+		LDA #cram_yellow
+		STA cramcolor_frame_ext	; Change Toolbox colors
+		STA cramcolor_background
+
+		LDA #.c_title
+		STA puts_color
+		LDA #<s_monitor_panic
+		PHA
+		LDA #>s_monitor_panic
+		PHA
+		JSR puts
+
+		LDA #.c_bright
+		STA cramcolor_text
+		STA puts_color
+
+		JSR show_registers
+
+		LDA #<s_panic_irq
+		PHA
+		LDA #>s_panic_irq
+		PHA
+		JSR puts
+
+		LDA $0315
+		JSR puts_hexbyte
+		LDA $0314
+		JSR puts_hexbyte
+
+		LDA #<s_panic_brk
+		PHA
+		LDA #>s_panic_brk
+		PHA
+		JSR puts
+
+		LDA $0316
+		JSR puts_hexbyte
+		LDA $0317
+		JSR puts_hexbyte
+
+		LDA #<s_panic_nmi
+		PHA
+		LDA #>s_panic_nmi
+		PHA
+		JSR puts
+
+		LDA $0318
+		JSR puts_hexbyte
+		LDA $0319
+		JSR puts_hexbyte
+
+		JSR puts_newline
+		LDY # 0
+.loop_stack	TYA
+		AND #$0f
+		BNE .skip_address
+
+		JSR puts_newline
+		LDA #.c_bright
+		STA puts_color
+		LDA # 1
+		JSR puts_hexbyte
+		TYA
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+.skip_address
+		LDA #.c_dark
+		STA puts_color
+		LDA $0100,Y
+		JSR puts_hexbyte
+		INY
+		LDA #.c_bright
+		STA puts_color
+		LDA $0100,Y
+		JSR puts_hexbyte
+		INY
+		BNE .loop_stack
+
+		LDA #<s_system_halted
+		PHA
+		LDA #>s_system_halted
+		PHA
+		JSR puts
+
+.wait_return	JSR call_get_key
+		CPX #'r'
+		BEQ .restart
+		CPX #'c'
+		BNE .wait_return
+
+.continue	JSR print_main_menu
+		LDX #<client_snapshot
+		LDA #>client_snapshot
+		JSR restore_system_state
+
+		JSR init_interrupt_handlers
+		JMP brk_return
+
+.restart	JSR switch_to_monitor_context
+		CLI
+		JMP boot
+
+
+s_monitor_panic	!pet "demon panic", 13, 13, 0
+s_monitor_panic_end
+s_panic_irq	!pet 13, "irq:", 0
+s_panic_brk	!pet " brk:", 0
+s_panic_nmi	!pet " nmi:", 0
+s_system_halted	!pet 13, 13, "(c)ontinue or (r)estart? ", 0
+
+
+} ; USE_CONTEXT
+;==============================================================================
+!eof

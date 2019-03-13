@@ -1,0 +1,392 @@
+;==============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+!ifdef TB_GOTO_POS0 {
+;==============================================================================
+!zone goto_pos0
+;==============================================================================
+goto_pos0
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDX # 0
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+} ; TB_goto_pos0
+
+
+!ifdef TB_GOTO_EOL {
+;==============================================================================
+!zone GOTO_EOL
+;==============================================================================
+goto_eol
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		JSR goto_pos0
+
+		LDY # 39
+.loop		LDA (puts_vptr),Y
+		CMP #' '
+		BNE .found
+		DEY
+		BPL .loop
+
+.found		INY
+		TYA
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+} ; TB_GOTO_EOL
+
+
+
+!ifdef TB_MENU_HOME {
+;==============================================================================
+!zone MENU_HOME
+;==============================================================================
+menu_home	PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDX zp_crsr_col		; Home position top, home bottom?
+		BEQ .check_top
+.check_normal	JSR goto_pos0
+		JMP .exit
+
+.check_top	LDY zp_crsr_row
+		CPY scroll_top
+		BNE .check_bottom
+		LDY scroll_bottom
+		JMP .done
+
+.check_bottom	LDY scroll_top
+.done		JSR goto_xy
+.exit		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+} ; TB_MENU_HOME
+
+
+!ifdef TB_PUTC {
+;==============================================================================
+!zone PUTC
+;==============================================================================
+.temp		!byte 0,0
+
+putc		CMP #$00
+		BEQ .done		; Don't print null characters
+
+		STA .temp
+
+		PHA
+		TYA
+		PHA
+		TXA
+		PHA
+
+		LDA #<.temp
+		PHA
+		LDA #>.temp
+		PHA
+		JSR puts
+
+		PLA
+		TAX
+		PLA
+		TAY
+		PLA
+.done		RTS
+
+} ; TB_PUTC
+
+
+!ifdef TB_SPUTC {
+;==============================================================================
+!zone SPUTC
+;==============================================================================
+sputc		JSR screen_to_petscii
+		JMP putc
+
+} ; TB_SPUTC
+
+
+!ifdef TB_PUTS_XY {
+;------------------------------------------------------------------------------
+!zone SAVE_RESTORE_COLOR_CURSOR_POS
+;------------------------------------------------------------------------------
+.cpos		!byte 0,0
+.color		!byte 0
+
+save_cursor_color_pos
+		LDA zp_crsr_col
+		STA .cpos
+		LDA zp_crsr_row
+		STA .cpos+1
+		LDA puts_color
+		STA .color
+		RTS
+
+restore_cursor_color_pos
+		LDX .cpos
+		LDY .cpos+1
+		JSR goto_xy
+		LDA .color
+		STA puts_color
+		RTS
+
+
+;==============================================================================
+!zone PUTS_XY
+;==============================================================================
+.raddr		!byte 0,0
+.prev_scroll	!byte 0
+
+puts_xy		PLA
+		STA .raddr+1		;; Get rid of this!?
+		PLA
+		STA .raddr
+
+		JSR save_cursor_color_pos
+		LDA puts_scroll_mode
+		STA .prev_scroll
+
+		JSR goto_xy		; .X, .Y set by caller
+
+		LDA #scroll_mode_none
+		STA puts_scroll_mode
+		JSR puts		; Takes pointer from stack
+		LDA .prev_scroll
+		STA puts_scroll_mode
+
+		JSR restore_cursor_color_pos
+
+		LDA .raddr
+		PHA
+		LDA .raddr+1
+		PHA
+		RTS
+
+} ; TB_PUTS_XY
+
+
+!ifdef TB_RPUTS_XY {
+;==============================================================================
+!zone RPUTS_XY
+;==============================================================================
+
+.raddr		!byte 0,0
+
+	.sptr = $f7
+
+rputs_xy
+;------------------------------------------------------------------------------
+; IN:	STACK	int16	Pointer to string
+;	.X	int8	X-position
+;	.Y	int8	Y-position	; LDA<,PHA, LDA>,PHA, LDX, LDY, JSR
+
+		PLA			; Save return address
+		STA .raddr
+		PLA
+		STA .raddr+1
+
+		PLA			; Get pointer to string
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		TYA
+		PHA
+		TXA			; Save target position
+		PHA
+
+		LDX .sptr		; Get length of string
+		LDA .sptr+1
+		JSR get_visual_strlen
+		STA $02			; Subtract length from x-pos
+		SEC
+		PLA			; Get x-pos
+		SBC $02
+		TAX
+		INX			; Correct, so last char lands on pos-x
+
+		PLA			; Get x-pos
+		TAY
+
+		LDA .sptr		; Print string right aligned
+		PHA
+		LDA .sptr+1
+		PHA
+		JSR puts_xy
+
+		LDA .raddr+1		; Restore return address
+		PHA
+		LDA .raddr
+		PHA
+
+		RTS
+
+} ; TB_RPUTS_XY
+
+
+!ifdef TB_PUTS_NEWLINE {
+;==============================================================================
+!zone PUTS_NEWLINE
+;==============================================================================
+puts_newline
+		PHA
+		LDA #petscii_newline
+		JSR putc
+		PLA
+		RTS
+
+} ; TB_PUTS_NEWLINE
+
+
+!ifdef TB_PUTS_RVS {
+;=============================================================================
+!zone PUTS_RVS
+;=============================================================================
+puts_rvs_on
+		PHA
+		LDA #$ff
+		STA puts_rvs_flag
+		PLA
+		RTS
+
+puts_rvs_off	PHA
+		LDA #$00
+		STA puts_rvs_flag
+		PLA
+		RTS
+
+} ; TB_PUTS_RVS
+
+
+!ifdef TB_PUTS_STRBYTE {
+;==============================================================================
+!zone PUTS_STRBYTE
+; IN:	.A	char	'0'..'9'	Prints byte converted to string
+;	.X	char	'0'..'9'	(helpers.a:byte_to_str) without
+;	.Y	char	'0'..'9'	leading zeroes
+;==============================================================================
+puts_strbyte
+		CMP #'0'
+		BEQ .t
+.h		JSR putc
+		JMP .t2
+.t		TXA
+		CMP #'0'
+		BEQ .u
+.t2		TXA
+		JSR putc
+.u		TYA
+		JSR putc
+		RTS
+
+} ; TB_PUTS_STRBYTE
+
+
+!ifdef TB_PUTS_HEXBYTE {
+;==============================================================================
+!zone PUTS_STRBYTE
+; IN:	.A	int8	Byte to print as hex string
+;==============================================================================
+.stemp		!byte 0,0,0
+.a		!byte 0
+.x		!byte 0
+.y		!byte 0
+
+puts_hexbyte
+;------------------------------------------------------------------------------
+		STA .a
+		STX .x
+		STY .y
+
+		JSR byte_to_hex
+	!if (1) {
+		STA .stemp
+		STX .stemp+1
+		LDA #<.stemp
+		PHA
+		LDA #>.stemp+1
+		PHA
+		JSR puts
+	} else {
+		JSR putc
+		TXA
+		JSR putc
+	}
+		LDA .a
+		LDX .x
+		LDY .y
+		RTS
+
+} ; TB_PUTS_HEXBYTE
+
+
+!ifdef TB_PUTS_STRWORD {
+;==============================================================================
+!zone PUTS_STRWORD
+; IN:	Stack	chars	5 chars from  word_to_str
+;==============================================================================
+.raddr		!byte 0,0
+puts_strword
+;------------------------------------------------------------------------------
+		PLA
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		PLA
+		JSR putc
+		PLA
+		JSR putc
+		PLA
+		JSR putc
+		PLA
+		JSR putc
+		PLA
+		JSR putc
+
+		LDA .raddr
+		PHA
+		LDA .raddr+1
+		PHA
+		RTS
+
+} ; TB_PUTS_STRWORD
+
+
+;==============================================================================
+!eof

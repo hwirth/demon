@@ -1,0 +1,809 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef SYMBOLS {
+
+
+;==============================================================================
+!zone SYMBOL_GLOBALS
+;==============================================================================
+
+	symbol_temp_str	= hexd_address
+
+
+;==============================================================================
+!zone INIT_SYMBOLS
+;==============================================================================
+
+	.tptr = $f7
+
+init_symbols
+;------------------------------------------------------------------------------
+		LDA #<symbol_table
+		STA .tptr
+		LDA #>symbol_table
+		STA .tptr+1
+
+		LDY # 0
+.loop		LDA # 0
+		STA (.tptr),Y
+		INY
+		CPY #(NR_SYMBOLS * SYMBOL_REC_LEN) & $ff
+		BNE .loop
+		INC .tptr+1
+		LDA .tptr+1
+		CMP #((NR_SYMBOLS * SYMBOL_REC_LEN) >> 8)+1
+		BCC .loop
+
+!ifdef SYMBOL_PRESETS {
+		LDY #.symbol_presets_len-1
+.loop_preset	LDA .symbol_presets,Y
+		STA symbol_table,Y
+		DEY
+		BPL .loop_preset
+}
+		CLC		; Trigger newline in case, we are called by *-
+		RTS
+
+!ifdef SYMBOL_PRESETS {
+.symbol_presets
+	!ifdef DEBUG {
+		!pet <boot, >boot,	"boot",0,0
+		!pet <init, >init,	"init",0,0
+		!pet <main, >main,	"main",0,0
+		!pet <exit, >exit,	"exit",0,0
+	}
+		!pet <heap, >heap,	"heap",0,0
+.symbol_presets_end
+	.symbol_presets_len = .symbol_presets_end - .symbol_presets
+}
+
+;==============================================================================
+!zone LOOP_ALL_SYMBOLS
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.temp_x	= $ff
+	.PLACEHOLDER = 0
+
+loop_all_symbols
+;------------------------------------------------------------------------------
+; IN:	Stack	int16	Address of callback function
+; OUT:	CARRY	Boolean	Clear carry, if callback reports success
+
+		; Iterate over symbol table and call a custom function for each
+		; entry. Custom function must return set carry to continue the
+		; loop.
+
+		PLA
+		TAX
+		PLA
+		TAY
+
+		PLA
+		STA .jsr+2
+		PLA
+		STA .jsr+1
+
+		TYA
+		PHA
+		TXA
+		PHA
+
+		LDA #<symbol_table
+		STA .aptr
+		LDA #>symbol_table
+		STA .aptr+1
+
+		LDX # 0
+.loop_aptr	STX .temp_x
+
+.jsr		JSR .PLACEHOLDER
+		LDX .temp_x		; Won't affect carry
+		BCS .cont
+		RTS
+
+.cont		CLC
+		LDA .aptr
+		ADC #SYMBOL_REC_LEN
+		STA .aptr
+		LDA .aptr+1
+		ADC # 0
+		STA .aptr+1
+
+		INX
+		CPX #NR_SYMBOLS
+		BNE .loop_aptr
+
+		SEC
+		RTS
+
+
+;==============================================================================
+!zone FIND_SYMBOL_BY_ADDR
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.addr	= $f9
+
+find_symbol_by_addr
+;------------------------------------------------------------------------------
+; IN:	ZP	in16	.addr	Address to look for
+
+		LDA #<.check_addr
+		PHA
+		LDA #>.check_addr
+		PHA
+		JSR loop_all_symbols
+		RTS
+
+.check_addr
+;------------------------------------------------------------------------------
+		LDY # 0
+		LDA (.aptr),Y
+		CMP .addr
+		BNE .not_equal
+		INY
+		LDA (.aptr),Y
+		CMP .addr+1
+		BNE .not_equal
+		CLC
+		RTS
+
+.not_equal	SEC
+		RTS
+
+
+;==============================================================================
+!zone FIND_SYMBOL_BY_NAME
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.strbuf	= TAPE_BUFFER
+	.s_symbol = symbol_temp_str	; Buffer for found symbol
+
+find_symbol_by_name
+;------------------------------------------------------------------------------
+		LDA #<.check_name
+		PHA
+		LDA #>.check_name
+		PHA
+		JSR loop_all_symbols
+		RTS
+
+.check_name
+;------------------------------------------------------------------------------
+		LDY # 2
+		LDX #SYMBOL_REC_LEN-2
+.loop_check	LDA .s_symbol-2,Y	; Offset -2, so .Y can be used with ..
+		BEQ .name_found		; EOS?
+		CMP (.aptr),Y		; .. .s_symbol  and  .aptr
+		BEQ .name_cont
+.not_found	SEC			; Not equal
+		RTS
+
+.name_cont	INY
+		DEX
+		BNE .loop_check
+		BEQ .name_done		; Will always jump
+
+.name_found	INY			; Check, if symbol name also ends
+		LDA # 0
+		CMP (.aptr),Y
+		BNE .not_found
+
+.name_done	CLC
+		RTS
+
+
+;==============================================================================
+!zone FIND_EMPTY_SYMBOL_SLOT
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+
+find_empty_symbol_slot
+;------------------------------------------------------------------------------
+		LDA #<.check_slot
+		PHA
+		LDA #>.check_slot
+		PHA
+		JSR loop_all_symbols
+		RTS
+
+
+.check_slot
+;------------------------------------------------------------------------------
+		LDY # 2
+		LDA (.aptr),Y
+		BEQ .empty
+		SEC
+		RTS
+
+.empty		CLC
+		RTS
+
+
+;==============================================================================
+!zone ADDRESS_TO_SYMBOL
+;==============================================================================
+
+	.s_addr	= symbol_temp_str	; Buffer for address as PETSCII
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.lptr	= $f9			; Pointer to symbol text
+	.llen	= $fb			; Length of symbol text
+	.dpos	= $fc			; Position of the first dollar sign
+	.strbuf	= TAPE_BUFFER
+
+address_to_symbol
+;==============================================================================
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDA #<.try_replace_address
+		PHA
+		LDA #>.try_replace_address
+		PHA
+		JSR loop_all_symbols
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+
+		RTS
+
+
+dumpaddr_to_symbol
+;==============================================================================
+; IN:	.X/.A	int16	Address to convert into a symbol
+
+		STA $02
+		TXA
+		PHA
+		TYA
+		PHA
+		LDA $02
+		PHA
+
+		TXA
+		JSR byte_to_hex
+		STA .strbuf+3
+		STA .strbuf+8
+		STX .strbuf+4
+		STX .strbuf+9
+
+		PLA
+		PHA
+
+		JSR byte_to_hex
+		STA .strbuf+1
+		STA .strbuf+6
+		STX .strbuf+2
+		STX .strbuf+7
+
+		LDA #'$'
+		STA .strbuf+5
+		LDA # 0
+		STA .strbuf+10
+
+		JSR address_to_symbol
+
+		LDA .strbuf+5
+		CMP #'$'
+		BEQ .not_replaced
+		LDA #'*'
+		STA .strbuf
+		LDA #' '
+		STA .strbuf+5
+;------------------------------------------------------------------------------
+	!ifdef SYMBOLS {
+		LDA zp_crsr_row		; Scroll area below cursor, if in top
+		CMP scroll_top		; row - we are scrolling up and need an
+		BNE .skip_insert	; extra row to show the label for the
+		JSR insert_line		; instruction's address
+.skip_insert
+	}
+	!if USE_COLORS {
+		LDA puts_color
+		PHA
+		LDA #SYMBOL_COLOR
+		STA puts_color
+	}
+		LDA #<.strbuf
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+	!if USE_COLORS {
+		PLA
+		STA puts_color
+	}
+		LDX # 30
+		LDY zp_crsr_row
+		JSR goto_xy
+		LDA #':'
+		JSR putc
+
+		JSR puts_newline
+		CLC
+		BCC .done
+;------------------------------------------------------------------------------
+.not_replaced	SEC
+.done		PLA
+		STA $02
+		PLA
+		TAY
+		PLA
+		TAX
+		LDA $02
+
+		RTS
+
+
+.try_replace_address
+;------------------------------------------------------------------------------
+		TXA			; Save .X
+		PHA
+
+		LDY # 1			; Convert symbol address (hi) to string
+		LDA (.aptr),Y
+		JSR byte_to_hex
+		STA .s_addr
+		STX .s_addr+1
+
+		DEY			; Convert symbol address (lo) to string
+		LDA (.aptr),Y
+		JSR byte_to_hex
+		STA .s_addr+2
+		STX .s_addr+3
+
+		CLC			; Set pointer to symbol text begin
+		LDA .aptr
+		ADC # 2
+		STA .lptr
+		LDA .aptr+1
+		ADC # 0
+		STA .lptr+1
+
+		LDY #SYMBOL_REC_LEN-3	; Find length of symbol text
+.loop_len	LDA (.lptr),Y
+		BNE .found_len
+		DEY
+		BPL .loop_len
+		BMI .not_found		; Empty entry, abort. Will always jump
+
+.found_len	INY
+		STY .llen		; Remember length
+
+		LDX # 0
+.loop_addr	LDA .strbuf,X
+		BEQ .not_found
+		INX
+		CMP #'$'		; Compare .A with '$'
+		BNE .loop_addr
+
+.found_dollar	STX .dpos		; Actual position of '$' is .dpos-1
+		LDY # 0
+.loop_dollar	LDA .strbuf,X
+		CMP .s_addr,Y
+		BNE .not_found
+		INX
+		INY
+		CPY # 4			; 4 nibbles checked?
+		BCC .loop_dollar
+
+.addr_match	LDA #'.'
+		STA .strbuf-5,X		; Replace $ with a dot
+
+		LDA .strbuf+2,X		; Save rest of line after address
+		PHA
+		LDA .strbuf+1,X		; isn't part of this line
+		PHA
+		LDA .strbuf,X
+		PHA
+		JMP .cont_store
+
+.cont_store	LDY # 0			; Store symbol name in string
+		LDX .dpos
+.loop_symbol	LDA (.lptr),Y
+		STA .strbuf,X
+		INX
+		INY
+		CPY .llen
+		BNE .loop_symbol
+
+		LDY # 3			; Add saved 3 chars after symbol
+.loop_rest	PLA
+		BEQ .skip_rest
+		CMP #' '
+		BEQ .skip_rest
+		STA .strbuf,X
+		INX
+.skip_rest	DEY
+		BNE .loop_rest
+
+.store_eos	LDA # 0			; Create EOS
+		STA .strbuf,X
+
+		PLA			; No need to restore .X
+		CLC			; Signal to exit the loop
+		RTS
+
+.not_found	PLA			; Restore .X, loop will continue
+		TAX
+		SEC			; Signal to continue the loop
+		RTS
+
+
+;==============================================================================
+!zone SYMBOL_TO_ADDRESS
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.dpos	= $fc			; Index of begin of symbol text
+	.ppos	= $fd			; Index of 3 saved chars after symbol
+
+	.strbuf	= TAPE_BUFFER
+	.s_symbol = symbol_temp_str	; Buffer for found symbol
+
+.error		JMP line_show_error
+
+symbol_to_address
+;==============================================================================
+		LDY # 1			; Ignore dots in the first column
+.loop_dot	LDA .strbuf,Y
+		BNE .cont_dot		; EOS?
+.error_exit	SEC			; Report no dot (symbol) found
+		RTS
+
+.cont_dot	CMP #'.'
+		BEQ .found_dot
+		INY
+		BNE .loop_dot		; Will always jump
+
+;------------------------------------------------------------------------------
+.found_dot	LDX # 0			; .X counts length of symbol name
+		STY .dpos		; Remember position of dot
+		INY
+.copy_symbol	LDA .strbuf,Y
+		BEQ .copy_done
+		CMP #' '
+		BEQ .copy_done
+		CMP #','
+		BEQ .copy_done
+		CMP #')'
+		BEQ .copy_done
+		STA .s_symbol,X
+		INY
+		INX
+		CPX #SYMBOL_REC_LEN-2
+		BCC .copy_symbol
+		JMP .error		; Label too long
+
+.copy_done	STA .s_symbol+1,X	; Save first char after symbol
+		LDA # 0			; Store EOS after copied symbol
+		STA .s_symbol,X
+		INY			; Save second and third char
+		LDA .strbuf,Y
+		STA .s_symbol+2,X
+		INY
+		LDA .strbuf,Y
+		STA .s_symbol+3,X
+
+		STX .ppos		; Remember where we put the 3 chars
+
+		JSR find_symbol_by_name
+		BCC .copy_addr
+		JMP .error		; Return set carry (symbol not found)
+
+.copy_addr	LDY # 1
+		LDA (.aptr),Y
+		JSR byte_to_hex
+		PHA
+		TXA
+		PHA
+		DEY
+		LDA (.aptr),Y
+		JSR byte_to_hex
+		PHA
+		TXA
+		PHA
+
+		LDY .dpos
+		PLA
+		STA .strbuf+4,Y
+		PLA
+		STA .strbuf+3,Y
+		PLA
+		STA .strbuf+2,Y
+		PLA
+		STA .strbuf+1,Y
+		LDA #'$'
+		STA .strbuf,Y
+
+		LDX .ppos		; Index to 3 saved chars
+		LDA .s_symbol+1,X
+		STA .strbuf+5,Y
+		LDA .s_symbol+2,X
+		STA .strbuf+6,Y
+		LDA .s_symbol+3,X
+		STA .strbuf+7,Y
+		LDA # 0
+		STA .strbuf+8,Y
+
+		CLC			; Report successful replacement
+		RTS
+
+
+;==============================================================================
+!zone LAFN_LIST_SYMBOLS
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.strbuf	= TAPE_BUFFER
+
+lafn_list_symbols
+;------------------------------------------------------------------------------
+		JSR puts_newline
+
+		LDA #<.print_symbol
+		PHA
+		LDA #>.print_symbol
+		PHA
+		JSR loop_all_symbols
+
+		LDA zp_crsr_col
+		BNE .newline
+		SEC
+		RTS
+
+.newline	CLC
+		RTS
+
+
+.print_symbol
+;------------------------------------------------------------------------------
+		TXA
+		PHA
+
+		JSR check_run_stop
+		BCC .start_print
+		PLA
+		CLC
+		RTS
+
+;------------------------------------------------------------------------------
+.start_print	; Copy symbol name to string buffer
+
+		LDY # 2
+.loop_to_strbuf	LDA (.aptr),Y
+		BEQ .to_strbuf_done
+		STA .strbuf-2,Y
+		INY
+		CPY #SYMBOL_REC_LEN
+		BNE .loop_to_strbuf
+.to_strbuf_done	CPY # 2
+		BNE .to_strbuf_exit
+		LDA #'-'
+		STA .strbuf
+		INY
+.to_strbuf_exit	LDA # 0
+		STA .strbuf-2,Y
+;------------------------------------------------------------------------------
+		LDY # 1
+		LDA (.aptr),Y
+		JSR puts_hexbyte
+		DEY
+		LDA (.aptr),Y
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+		LDA #<.strbuf
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		LDA zp_crsr_col
+		CMP # 13
+		BCC .print_go13
+		CMP # 26
+		BCC .print_go26
+		JSR puts_newline
+		JMP .print_exit
+
+.print_go26	LDX # 26
+		BNE .print_gotoxy
+.print_go13	LDX # 13
+.print_gotoxy	LDY zp_crsr_row
+		JSR goto_xy
+.print_exit	PLA
+		TAX
+		SEC			; Continue loop
+		RTS
+
+
+;==============================================================================
+!zone LAFN_SHOW_SYMBOL
+;==============================================================================
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.strbuf	= TAPE_BUFFER
+	.s_symbol = symbol_temp_str	; Buffer for found symbol
+
+lafn_show_symbol
+;------------------------------------------------------------------------------
+		LDY # 2
+.loop_copysymbol
+		LDA .strbuf,Y
+		JSR screen_to_petscii
+		STA .s_symbol-2,Y
+		BEQ .done_copysymbol
+		CMP #' '
+		BEQ .done_copysymbol
+		INY
+		CPY #SYMBOL_REC_LEN+1
+		BCC .loop_copysymbol	; Too long?
+.error		JMP line_show_error
+		;RTS
+
+.done_copysymbol
+		LDA # 0			; Store EOS
+		STA .s_symbol-2,Y
+
+		JSR find_symbol_by_name
+		BCS .error
+
+		LDX # 1
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		LDY # 1
+		LDA (.aptr),Y
+		JSR puts_hexbyte
+		DEY
+		LDA (.aptr),Y
+		JSR puts_hexbyte
+
+		LDA #' '
+		JSR putc
+		LDA #'.'
+		JSR putc
+
+		LDA #<.s_symbol
+		PHA
+		LDA #>.s_symbol
+		PHA
+		JSR puts
+
+		LDX # 5
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		SEC			; Prevent newline
+		RTS
+
+
+;==============================================================================
+!zone ELFN_SYMBOL
+;==============================================================================
+
+.function_table
+;------------------------------------------------------------------------------
+		!scr ' ',	<lafn_list_symbols,	>lafn_list_symbols
+		!scr '.',	<lafn_show_symbol,	>lafn_show_symbol
+		!scr '-',	<init_symbols,		>init_symbols
+		!byte 0
+
+	.aptr	= $f7			; Shared pointer to symbol entry address
+	.addr	= $f9
+	.strbuf	= TAPE_BUFFER
+	.PLACEHOLDER = 0
+
+.error		JMP line_show_error
+
+elfn_symbol
+;==============================================================================
+		; Search for one-char-extension commands (*<space>, *-, ...)
+		LDA .strbuf+1
+		STA $02
+		LDY # 0
+.function_loop	LDA .function_table,Y
+		BEQ .update_symbol	; "Command" byte is zero? EOL.
+		CMP $02
+		BEQ .function_found
+		INY			; Select next entry
+		INY
+		INY
+		BNE .function_loop	; Will always jump
+
+;------------------------------------------------------------------------------
+.function_found	STA el_command		; Save the command for the handler
+		INY
+		LDA .function_table,Y
+		STA .function_jsr+1
+		INY
+		LDA .function_table,Y
+		STA .function_jsr+2
+
+.function_jsr	JMP .PLACEHOLDER
+		;RTS
+
+.update_symbol
+;==============================================================================
+		; Look for address, clear/set symbol
+
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+		STX .addr
+		STA .addr+1
+
+		JSR line_expect_word
+		BCS .clear_symbol
+		CPY # 5+SYMBOL_REC_LEN	; Position of space (6) + maxlen + 1
+		BCC .start_update
+		LDY # 12
+		JMP .error
+;------------------------------------------------------------------------------
+.start_update	; Add or update symbol
+
+		JSR find_symbol_by_addr	; Returns pointer to record in .aptr
+		BCC .store_symbol
+		JSR find_empty_symbol_slot	; Pointer to record in .aptr
+		BCC .store_symbol
+		JMP lafn_list_symbols	; No free slot, list all symbols instead
+
+.store_symbol	LDX # 6
+		LDY # 2
+.loop_symbol	LDA .strbuf,X
+		BEQ .store_null
+		CMP #' '
+		BEQ .store_null
+		JSR screen_to_petscii
+		STA (.aptr),Y
+		INX
+		INY
+		CPY #SYMBOL_REC_LEN
+		BCC .loop_symbol
+		BCS .store_addr		; Don't write NULL char
+
+.store_null	LDA # 0
+		STA (.aptr),Y
+.store_addr	LDY # 0
+		LDA .addr
+		STA (.aptr),Y
+		INY
+		LDA .addr+1
+		STA (.aptr),Y
+
+		CLC			; Trigger newline
+		RTS
+
+
+.clear_symbol
+;------------------------------------------------------------------------------
+		JSR find_symbol_by_addr
+		BCC .start_clear
+		JMP line_show_error
+		;RTS
+
+.start_clear	LDA # 0
+		LDY #SYMBOL_REC_LEN-1
+.loop_clear	STA (.aptr),Y
+		DEY
+		BPL .loop_clear
+
+		RTS
+
+
+} ; SYMBOLS
+;==============================================================================
+!eof

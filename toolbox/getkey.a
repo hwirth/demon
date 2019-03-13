@@ -1,0 +1,212 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+; HINTS
+; When comparing results, store your key white-list as:
+; !pet "ABCabc"
+;-----------------------------------------------------------------------------
+
+!ifdef GETKEY_BEEP {
+key_beep	!byte $ff		; Runtime option
+}
+
+
+;==============================================================================
+!zone CURSOR
+;==============================================================================
+
+enable_cursor
+;-----------------------------------------------------------------------------
+		LDA #$ff
+		STA cursor_blink
+!ifdef TOOLBOX_MENU_COLORS {
+		LDA cramcolor_cursor
+} else {
+		LDA $0287
+}
+		STA puts_color
+
+		RTS
+
+disable_cursor
+;-----------------------------------------------------------------------------
+		LDA #$00
+		STA cursor_blink
+		RTS
+
+
+;==============================================================================
+!zone GETKEY
+; OUT:	.X	PETSCII code corresponding to pressed key
+;==============================================================================
+
+	.beepfrq_kbd	= beepfrq_kbd	; See helpers.a
+	.beeplen_kbd	= beeplen_kbd
+
+	.blink_speed	= $10
+
+!ifdef GETKEY_REPEAT_SPEED {
+		.repeat_speed = GETKEY_REPEAT_SPEED
+} else {	.repeat_speed	= $04
+}
+
+!ifdef GETKEY_REPEAT_FIRST {
+		.repeat_first = GETKEY_REPEAT_FIRST
+} else {	.repeat_first	= $20
+}
+
+.raddr		!byte 0,0
+.char_before	!byte 0
+.color_before	!byte 0
+cursor_count	!byte 0
+cursor_blink	!byte $ff
+.previous_key	!byte 0
+
+sys_getkey
+call_get_key	LDY #$00
+		LDA (puts_vptr),Y
+		STA .char_before
+		LDA (puts_cptr),Y
+		STA .color_before
+
+		LDA cursor_blink
+		BEQ .skip_cursor
+		LDA puts_color
+		STA (puts_cptr),Y
+.skip_cursor
+		LDA #.blink_speed/2	;;$01
+		STA cursor_count
+
+		LDA cursor_blink
+		BEQ .skip_initial_cursor
+		LDA #$80		; Set inverse cursor for static mode
+		LDY #$00		; (Without IRQ counter)
+		EOR (puts_vptr),Y
+		STA (puts_vptr),Y
+.skip_initial_cursor
+
+!ifdef GETKEY_REPEAT_FLAG {
+		LDA #GETKEY_REPEAT_FLAG	; $80: All keys repeat
+} else {	LDA #$7f
+}
+		STA $028a		; $7f: No keys, 0: normal
+
+		LDA $cb
+		STA .previous_key
+		CMP #$40
+		BNE .skip_first_1
+		LDA #.repeat_first
+		STA $028b
+		STA $028c
+.skip_first_1
+;------------------------------------------------------------------------------
+		; http://sta.c64.org/cbm64kbdfunc.html
+.loop1
+
+		LDA $cb
+		CMP .previous_key
+		BEQ .skip_first
+		CMP #$40
+		BNE .skip_first
+		STA .previous_key
+		LDA #.repeat_first
+		STA $028b
+		STA $028c
+.skip_first
+
+		JSR $ffe4		; GETIN, check for pressed keys
+		;;JSR $F13E
+		;;JSR $f157		; CHRIN
+		;;JSR $ea87
+		;;JSR $f142
+
+!ifdef GETKEY_HOOK {
+		PHA
+		JSR custom_getkey_handler
+		PLA
+}
+		CMP #$a1		;; Can't stop Commodore key from
+		BEQ .skip_ckey		;; repeating...!?
+		CMP #$00
+		BNE .exit
+.skip_ckey
+		LDA cursor_blink
+		BEQ .loop1
+
+		LDA cursor_count
+!ifdef GETKEY_IRQ_BLINK {
+		BNE .loop1		;; BPL?
+}
+!ifndef GETKEY_IRQ_BLINK {
+		BEQ .cont
+}
+		LDA #$80
+		LDY #$00
+		EOR (puts_vptr),Y
+		STA (puts_vptr),Y
+
+		AND #$80
+		BNE .inverse
+.normal		LDA .color_before
+		STA (puts_cptr),Y
+		JMP .cont
+.inverse	LDA puts_color
+		STA (puts_cptr),Y
+
+.cont
+!ifdef GETKEY_IRQ_BLINK {
+		LDA  #.blink_speed
+}
+!ifndef GETKEY_IRQ_BLINK {
+		LDA # 0
+}
+		STA cursor_count
+
+		JMP .loop1		; No key pressed?
+;------------------------------------------------------------------------------
+
+.exit		PHA			; Keep char for returning
+
+		LDX #.repeat_speed
+		JSR sleep
+
+		LDA .char_before	; Remove cursor from screen
+		LDY #$00
+		STA (puts_vptr),Y
+		LDA .color_before
+		STA (puts_cptr),Y
+
+!ifdef GETKEY_BEEP {
+	!ifdef TB_SID_BEEP {
+		LDA key_beep
+		BEQ .skip_beep
+		STX $02
+		LDA #.beepfrq_kbd
+		LDX #.beeplen_kbd
+		JSR beep
+		LDX $02
+	}
+	!ifndef TB_SID_BEEP {
+		LDA key_beep
+		BEQ .skip_beep
+		INC $d020
+		INC $d021
+		LDX # 10
+		JSR sleep
+		DEC $d021
+		DEC $d020
+	}
+.skip_beep
+}
+		LDA #$00
+		STA $c6			; Nr. keys in input buffer
+
+		PLA
+		TAX
+
+		RTS
+
+
+;=============================================================================
+;EOF

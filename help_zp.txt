@@ -1,0 +1,152 @@
+--X
+pages: 0 1 2 4 6 8 a b c d
+back: ??
+X?
+Lmain
+X0
+00    cpu ddr 0=in/1=out
+01    cpu port, see ?rom
+02    -
+03/04 ptr rom routine float to int
+05/06 ptr rom routine int to float
+07    search char
+08    scan quote char at eos
+09    crsr col after last tab, spc
+0a    0=load, 1=verify
+0b    input buf, ptr/num subscripts dim
+0c    default array size dim
+0d    var type: 0=num, 255=string
+0e    num var type: 0=float, 128=int
+0f    list, g.collect
+X1
+10    user fn call, array
+11    0=input, 64=get, 152=read
+12    tracks sgn trig fn
+13    input dvc
+14/15 target line nr
+16    next avail. space str descr stack
+17,18 last string addr/stack
+19-21 temp string stack
+X2
+22-25 basic utility ptr
+26-2a float result mul, div
+2b/2c txttab, start basic program
+2d/2e vartab, num vars
+2f/30 arytab, arrays
+31/32 strend, string stack
+33/34 fretop, string stack top
+35/36 frespc, ptrs strings
+37/38 memsiz, string stack bottom
+39/3a cur. basic line nr
+3b/3c prev. basic line nr, cont
+3d/3e next basic statement, cont
+3f/40 cur. data line
+X4
+41,42 next data item
+43,44 temp, input
+44    temp storage input
+45,46 varnam to look up in varnam
+47,48 varnam cur. var
+49,4a index var, for
+4b,4c temp math, txtptr read/get/input
+4d    mask during eval (frmevl) <, >, =
+4e-4f temp fn or float during flpt
+50-52 strings
+53    len string var g.collect
+54    opcode "jmp abs"
+55-56 ptr fn eval
+57-5b reg tan fac3
+5c-60 reg tan fac4
+X6
+61    fac1 exp
+62-65 fac1 mant
+66    fac1 sgn
+67    nr terms series eval
+68    fac1: bit overflow area
+69    fac2 exp
+6a-6d fac2 mant
+6e    fac2 sgn
+6f    result sgned compare fac1, fac2
+      0=equal sgns, 255=different
+70    fac2: low byte fac1 mant, roundng
+71-72 ptr temp table series eval
+73-8a chrget: fetch next char basic prg
+X8
+8b-8f seed stored by rnd
+90    kernal i/o status
+92    const timing cass reads
+93    0=load, 1=verify
+94    char waiting in serial bus
+95    serial bus output reg
+96    cass block sync nr
+97    temp storage x reg
+98    nr open i/o files
+99    cur. input dvc
+9a    cur. output dvc
+9b    cass parity
+9c    tape byte received
+9d    6=error-, bit 7=control msg
+9e    cass pass 1 error log
+9f    cass pass 2 error log
+Xa
+a0-a2 jiffy clock
+a3-a4 bit ctr serial/cass
+a5    cass sync byte ctr
+a6    nr chars in cass i/o buf
+a7    rs-232/cass read data reg
+a8    rs-232 input bits received
+a9    rs-232 start bit 0=received
+      144=not received
+aa    rs-232 input byte buf
+ab    rs-232 input parity
+ac/ad ptr start addr load
+ae/af ptr end addr load/verify/save
+Xb
+b0/b1 ptr const timing cass
+b2/b3 ptr start cass buf
+b4    rs-232 output bit ctr
+b5    next output bit
+b6    output buf
+b7    len cur. filenam
+b8    cur. logical filenr
+b9    cur. secondary addr
+ba    cur. dvc nr
+bb    ptr cur. filenam
+bc    ptr cur. filenam
+bd    rs-232 output parity
+be    cass dupl block ctr
+bf    cass read byte reg
+Xc
+c0    cass motor
+c1/c2 start addr load/save
+c3/c4 end addr load/save
+c5    matrix coord last key, 64=none
+c6    nr chars in kbdbuf
+c7    print reverse
+c8    last col cur. line, input
+c9    x crsr coord, input
+ca    y crsr coord, input
+cb    index to kbd decoding table
+cc    flash crsr
+cd    ctr crsr blink
+ce    char at crsr pos
+cf    crsr blink
+Xd
+d0    input from 0=kbd, 3=screen
+d1    addr cur. scrnline
+d2    addr cur. scrnline
+d3    col crsr in cur. logical line spc
+d4    quote mode
+d5    max len logical scrnline
+d6    cur. physical line nr crsr
+d7    ascii val last printed char
+d8    insert mode
+d9-f2 scrnline link table
+f3/f4 ptr first addr in CRAM cur. line
+f5/f6 ptr kbd decoding table
+f7/f8 ptr rs-232 input buf
+f9/fa ptr rs-232 output buf
+fb-fe -
+ff    temp, float to ascii
+XX
+

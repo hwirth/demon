@@ -1,0 +1,788 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+	save_screen_buffer = $c800
+
+!ifdef TB_DRAW_BOX {
+;==============================================================================
+!zone DRAW_BOX
+; IN:	.A	char	puts_* color code
+;	.X, .Y	uint8_t	Width, Height
+;==============================================================================
+.prev_rvs_flag	!byte 0
+.pos_x		!byte 0
+.pos_y		!byte 0
+.char_l		!byte 0
+.char_m		!byte 0
+.char_r		!byte 0
+.width		!byte 0
+.height		!byte 0
+.ptr_temp	!byte 0,0
+
+	.sptr = $f7
+	.strbuf = TAPE_BUFFER
+
+draw_box
+;------------------------------------------------------------------------------
+		STA puts_color
+		LDA puts_rvs_flag
+		STA .prev_rvs_flag
+		LDA #$01
+		STA puts_rvs_flag
+
+		LDA .sptr+1		; Keep the ZP values
+		PHA
+		LDA .sptr
+		PHA
+
+		LDA #<.strbuf
+		STA .sptr
+		LDA #>.strbuf
+		STA .sptr+1
+
+		STX .width
+		STY .height
+
+		INX			; Calculate x-pos (Mid-Width/2)
+		INX
+		TXA
+		LSR
+		STA $02
+		SEC
+		LDA # 20
+		SBC $02
+		STA zp_crsr_col
+		STA .pos_x
+		INC .pos_x
+
+		INY			; Calculate y-pos (Mid-Height/2)
+		INY
+		TYA
+		LSR
+		STA $02
+		SEC
+		LDA # 12
+		SBC $02
+		STA zp_crsr_row
+		STA .pos_y
+		INC .pos_y
+
+		LDA #petscii_corner_tl	; Print top row
+		STA .char_l
+		LDA #petscii_line_hor
+		STA .char_m
+		LDA #petscii_corner_tr
+		STA .char_r
+		JSR .print_line
+
+.loop_mid	LDA #petscii_line_ver	; Print middle row
+		STA .char_l
+		LDA #' '
+		STA .char_m
+		LDA #petscii_line_ver
+		STA .char_r
+		JSR .print_line
+
+		DEC .height
+		BNE .loop_mid
+
+		LDA #petscii_corner_bl	; Print bottom row
+		STA .char_l
+		LDA #petscii_line_hor
+		STA .char_m
+		LDA #petscii_corner_br
+		STA .char_r
+		JSR .print_line
+
+		LDX .pos_x
+		LDY .pos_y
+		JSR goto_xy
+
+		PLA			; Restore ZP Values
+		STA .sptr
+		PLA
+		STA .sptr+1
+
+		RTS
+
+
+.print_line
+;------------------------------------------------------------------------------
+		LDY #$00
+		LDA .char_l
+		STA (.sptr),Y
+
+		LDA .char_m
+		LDY .width
+.loop_line	STA (.sptr),Y
+		DEY
+		BNE .loop_line
+
+		LDA .char_r
+		LDY .width
+		INY
+		STA (.sptr),Y
+
+		LDA #$00
+		INY
+		STA (.sptr),Y
+
+		LDX zp_crsr_col
+		LDY zp_crsr_row
+		LDA .sptr
+		PHA
+		LDA .sptr+1
+		PHA
+		JSR puts_xy
+		INC zp_crsr_row
+
+		RTS
+
+} ;; TB_DRAW_BOX
+
+
+!ifdef TB_TEXT_BOX {
+;==============================================================================
+!zone TEXT_BOX
+; IN:	STACK	Pointer to definitions string (must start with petscii_* color)
+; 		PHA lo, PHA hi, JSR
+;==============================================================================
+.raddr		!byte 0,0		; Return address for RTS
+.temp_y		!byte 0
+.width		!byte 0			; Calculated size of dialog box
+.height		!byte 0
+.xpos		!byte 0			; Temp x-position
+.ypos		!byte 0			; Keep top y value for positioning of
+					; cursor after printing the box
+	.strbuf = TAPE_BUFFER
+	.sptr = $f7
+	.bptr = $f9
+
+
+.is_control_char
+;------------------------------------------------------------------------------
+		PHA
+
+		CMP #$0d
+		BEQ .return_false	; CR needs to be parsed
+
+		AND #$7f
+		CMP #' '
+		BCC .return_true
+
+.return_false	PLA
+		CLC
+		RTS
+
+.return_true	PLA
+		SEC
+		RTS
+
+
+.set_bptr
+;------------------------------------------------------------------------------
+		STY $02
+		SEC
+		LDA #<.strbuf		; Init string buffer
+		SBC $02
+		STA .bptr
+		LDA #>.strbuf
+		SBC #$00
+		STA .bptr+1
+		RTS
+
+
+.print_buffer
+;------------------------------------------------------------------------------
+		LDA #$00
+		STA (.bptr),Y
+
+		LDA #<.strbuf		; Output buffer content
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		RTS
+
+
+;------------------------------------------------------------------------------
+; TEXT_BOX
+; IN:	STACK	Pointer to string, that starts with a petscii_* color ctrlchar
+;------------------------------------------------------------------------------
+text_box	PLA			; Save return address
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		PLA			; Get pointer to definition string
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		LDY #$00		; First byte of string
+		LDA (.sptr),Y		; must be color!
+		JSR putc
+		LDA #petscii_rvs_on
+		JSR putc
+;------------------------------------------------------------------------------
+		; Find max width
+
+		LDX #$00
+		STX .width
+		STX .height
+.loop_w		INX
+.dont_count	INY
+		LDA (.sptr),Y
+		BEQ .last_w		; End of string?
+		JSR .is_control_char
+		BCS .dont_count
+		CMP #$0d		; Return?
+		BNE .loop_w		; No, keep counting chars
+
+.last_w		INC .height
+		CPX .width
+		BCC .skip_w		; Current width is larger
+		STX .width
+.skip_w		LDX #$00
+		CMP #$00		; End of string?
+		BNE .loop_w
+
+		LDA .width
+		CMP #$02
+		BCC .dont_reduce
+		DEC .width		; Subtract the borders
+		;;DEC .width		;; Only one??
+.dont_reduce	LDX .width
+		LDY .height
+		LDA puts_color
+		JSR draw_box
+		LDA zp_crsr_col
+		STA .xpos
+;------------------------------------------------------------------------------
+		; Print box content
+		LDY zp_crsr_row
+		STY .ypos
+
+		LDY #$00		; Since .Y points to the source string,
+		JSR .set_bptr		; while each new line will be copied
+					; to the buffer individually, .bptr
+					; will be adjusted accordingly
+		LDY #$ff
+.next_char	INY			; Copy a char to the temp. buffer
+		LDA (.sptr),Y
+		STA (.bptr),Y		; May include $0 (EOS) or $0d (CR)
+		BEQ .lines_done		; Last line?
+		CMP #$0d		; New line?
+		BEQ .next_line
+		JMP .next_char
+
+.next_line	STY .temp_y		; Keep index to input string
+		JSR .print_buffer	; Output and shift .bptr
+		LDY .temp_y
+		JSR .set_bptr		; Reset and shift bptr
+
+		LDX .xpos		; Go to start of next line
+		INC zp_crsr_row
+		LDY zp_crsr_row
+		JSR goto_xy
+		LDY .temp_y
+		JMP .next_char
+
+.lines_done	JSR .print_buffer	; Print the last line
+;------------------------------------------------------------------------------
+		CLC			; Place cursor in bottom right corner
+		LDA .xpos		; after the text box has been printed
+		ADC .width
+		TAX
+		DEX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+		LDX .width		; Return width of window
+		RTS
+
+
+dialog_crsr_tl
+;------------------------------------------------------------------------------
+		LDX .xpos		; Place cursor in top left corner
+		LDY .ypos		; after the text box has been printed
+		JSR goto_xy
+		LDY .width
+		RTS
+
+} ; TB_TEXT_BOX
+
+
+!ifdef TB_DIALOG_BOX {
+;==============================================================================
+!zone DIALOG_BOX
+;==============================================================================
+.raddr		!byte 0,0
+.old_color	!byte 0			; Misc. saved states
+.old_rvs_flag	!byte 0
+.crsr_pos	!byte 0,0
+.pressed_key	!byte 0			; Return value
+.text_x		!byte 0
+.text_y		!byte 0
+.edit_index	!byte 0
+.text_maxl	!byte 0
+
+	.iptr = $fb
+	.tptr = $fd
+
+
+dialog_save_state
+;------------------------------------------------------------------------------
+		LDA puts_color		; Save misc. states
+		STA .old_color
+		LDA puts_rvs_flag
+		STA .old_rvs_flag
+		LDA zp_crsr_col
+		STA .crsr_pos
+		LDA zp_crsr_row
+		STA .crsr_pos+1
+
+		LDA #<save_screen_buffer
+		PHA
+		LDA #>save_screen_buffer
+		PHA
+		JSR call_save_screen
+
+		RTS
+
+
+dialog_restore_state
+;------------------------------------------------------------------------------
+		LDA #<save_screen_buffer
+		PHA
+		LDA #>save_screen_buffer
+		PHA
+		JSR call_load_screen
+
+		LDA .old_color		; Restore saved states
+		STA puts_color
+		LDA .old_rvs_flag
+		STA puts_rvs_flag
+		LDX .crsr_pos
+		LDY .crsr_pos+1
+		JSR goto_xy
+		RTS
+
+
+dialog_box
+;------------------------------------------------------------------------------
+; IN:	STACK	Pointer to definitions string (must start with petscii_* color)
+; 		PHA lo, PHA hi, JSR
+; OUT:	.X	Pressed key as petscii_* coded char
+
+		PLA			; Save return address
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		JSR dialog_save_state
+		JSR text_box
+;------------------------------------------------------------------------------
+		JSR call_get_key
+		STX .pressed_key
+;------------------------------------------------------------------------------
+		JSR dialog_restore_state
+
+		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+		LDX .pressed_key
+		RTS
+
+} ; TB_DIALOG_BOX
+
+
+!ifdef TB_INPUT_BOX {
+;==============================================================================
+; INPUT_BOX
+; IN:	STACK	Pointer to definitions string (must start with petscii_* color)
+; 		PHA txtlo, PHA txthi, PHA deflo, PHA defhi, JSR
+; 	.Y	Line in which to edit the given string
+;==============================================================================
+input_box
+		PLA			; Save return address
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		STY .text_y
+
+		JSR dialog_save_state
+		JSR text_box
+		STX .text_maxl
+		JSR dialog_crsr_tl
+
+		PLA
+		STA .iptr+1
+		PLA
+		STA .iptr
+
+		LDX zp_crsr_col
+		STX .text_x
+		CLC
+		LDA zp_crsr_row
+		ADC .text_y
+		TAY
+		JSR goto_xy
+
+		LDA .iptr
+		PHA
+		LDA .iptr+1
+		PHA
+		JSR puts
+;------------------------------------------------------------------------------
+		JSR input_dialog
+;------------------------------------------------------------------------------
+		JSR dialog_restore_state
+
+		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+		LDX .pressed_key
+		RTS
+
+
+; DIALOG_EDIT
+;------------------------------------------------------------------------------
+.function_table
+		!byte petscii_left,  	<.edit_left,	>.edit_left
+		!byte petscii_right,	<.edit_right,	>.edit_right
+		!byte petscii_home,	<.edit_home,	>.edit_home
+		!byte petscii_ins,	<.edit_ins,	>.edit_ins
+		!byte petscii_del,	<.edit_del,	>.edit_del
+		!byte petscii_clr_home,	<.edit_clr,	>.edit_clr
+		!byte petscii_newline,	<.edit_leave,	>.edit_leave
+		!byte petscii_larr,	<.edit_leave,	>.edit_leave
+		!byte petscii_runstop,	<.edit_leave,	>.edit_leave
+.tend		!byte 0
+
+.exit_flag	!byte 0
+
+input_dialog	LDY #$ff		; Find length of given string
+.loop_length	INY
+		LDA (.iptr),Y
+		BNE .loop_length
+		STY .edit_index		; Remember cursor position
+
+		LDA #$00
+		STA .exit_flag
+.loop_edit	LDA .exit_flag
+		BNE .leave
+
+		JSR call_get_key
+		STX .pressed_key
+
+		LDY #$00
+.next_function	CPY #(.tend - .function_table)
+		BEQ .key_undefined
+		LDA .function_table,Y
+		INY
+		CMP .pressed_key
+		BEQ .found_function
+		INY
+		INY
+		BNE .next_function
+
+.found_function	LDA .function_table,Y
+		STA .function_jump+1
+		INY
+		LDA .function_table,Y
+		STA .function_jump+2
+.function_jump	JSR $0000
+		JMP .loop_edit
+
+.key_undefined	JSR .edit_putc
+		JMP .loop_edit
+
+.edit_leave	LDA #$ff
+		STA .exit_flag
+.leave		RTS
+
+
+.edit_left
+;------------------------------------------------------------------------------
+		LDA #petscii_left		; Try moving to the left
+		JSR putc
+		LDY #$00
+		LDA (puts_vptr),Y	; Check, if we hit the border
+		AND #$7f
+		CMP #$5d		; Vertical line, screen code
+		BEQ .left_undo
+		DEC .edit_index
+		RTS
+
+.left_undo	LDA #petscii_right
+		JSR putc
+		JSR beep_error
+		RTS
+
+
+.edit_right
+;------------------------------------------------------------------------------
+		LDY .edit_index		; Already at end of string?
+		LDA (.iptr),Y
+		BEQ .right_error
+
+		;;CPY .text_maxl
+		;;BCC .right_error
+		LDA #petscii_right	; Try moving to the right
+		JSR putc
+		LDY #$00
+		LDA (puts_vptr),Y	; Check, if we hit the border
+		AND #$7f
+		CMP #$5d		; Vertical line, screen code
+		BEQ .right_undo
+
+		INC .edit_index
+		RTS
+
+.right_undo	LDA #petscii_left
+		JSR putc
+.right_error	JSR beep_error
+		RTS
+
+
+.edit_home
+;------------------------------------------------------------------------------
+		LDA .edit_index
+		BEQ .home_end
+		LDA #$00
+		STA .edit_index
+		LDX .text_x
+		LDY zp_crsr_row
+		JSR goto_xy
+		LDA #$00
+		STA .edit_index
+		RTS
+
+.home_end	LDY #$ff
+.loop_end	INY
+		LDA (.iptr),Y
+		BNE .loop_end
+		STY .edit_index
+		TYA
+		CLC
+		ADC .text_x
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+		RTS
+
+
+.edit_ins
+;------------------------------------------------------------------------------
+		LDY .edit_index
+		DEY
+.loop_inslen	INY
+		LDA (.iptr),Y
+		BNE .loop_inslen
+		INY
+		CPY .text_maxl		; String already at max. length?
+		BCS .ins_error
+
+		; (.iptr).Y now pointing to last char in string
+
+		CLC			; Two pointers for nice looping
+		LDA .iptr
+		ADC #$01
+		STA .tptr
+		LDA .iptr+1
+		ADC #$00
+		STA .tptr+1
+
+.loop_inscpy	DEY			; Copy each char one location to the
+		LDA (.iptr),Y		; right
+		STA (.tptr),Y
+		CPY .edit_index
+		BNE .loop_inscpy	; Including the EOS marker
+
+		LDA #' '		; Replace char under cursor with space
+		STA (.iptr),Y
+
+		LDX .text_x		; Print the new string
+		LDY zp_crsr_row
+		LDA .iptr
+		PHA
+		LDA .iptr+1
+		PHA
+		JSR puts_xy
+		RTS
+
+.ins_error	JSR beep_error
+		RTS
+
+
+.edit_del
+;------------------------------------------------------------------------------
+		LDA .edit_index		; Cannot DEL at begin of string
+		BEQ .del_error
+
+		CLC			; Two pointers for nice looping
+		LDA .iptr
+		ADC #$01
+		STA .tptr
+		LDA .iptr+1
+		ADC #$00
+		STA .tptr+1
+
+		DEC .edit_index
+		LDY .edit_index
+		DEY
+.loop_del	INY
+		LDA (.tptr),Y		; Move char one position left
+		STA (.iptr),Y
+		BNE .loop_del
+
+		LDX .text_x		; Print new text
+		LDY zp_crsr_row
+		JSR goto_xy
+		LDA .iptr
+		PHA
+		LDA .iptr+1
+		PHA
+		JSR puts
+		LDA #' '
+		JSR putc
+
+		LDA .text_x		; Move cursor left
+		CLC
+		ADC .edit_index
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		RTS
+
+.del_error	JSR beep_error
+		RTS
+
+
+.edit_clr
+;------------------------------------------------------------------------------
+		LDX .text_x		; Position cursor at begin of text
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		LDA #' '		; Fill string with white space
+		LDY .text_maxl
+		DEY
+.loop_clr	STA (.iptr),Y
+		DEY
+		BPL .loop_clr
+
+		LDY .text_maxl		; Add end of string marker
+		DEY
+		LDA #$00
+		STA (.iptr),Y
+
+		LDA .iptr		; Erase text from screen
+		PHA
+		LDA .iptr+1
+		PHA
+		LDX .text_x
+		LDY zp_crsr_row
+		JSR puts_xy
+
+		LDA #$00		; Put EOS marker at begin of string
+		LDY #$00
+		STA (.iptr),Y
+		STA .edit_index
+
+		RTS
+
+
+.edit_putc
+;------------------------------------------------------------------------------
+		TXA
+		AND #$7f
+		CMP #' '
+		BCC .illegal_char
+
+		LDY .text_maxl
+		DEY
+		DEY
+		CPY .edit_index
+		BCC .illegal_char	; Cant't add more chars, string full
+
+		LDY .edit_index		; Adding new char to end of string?
+		LDA (.iptr),Y
+		BNE .notatend
+		LDA #$00
+		INY
+		STA (.iptr),Y
+		DEY
+.notatend	TXA			; Write char to the string
+		STA (.iptr),Y
+		JSR putc		; Print char and move cursor
+		INC .edit_index
+		RTS
+
+.illegal_char	JSR beep_error
+		RTS
+
+
+print_edit_menu
+;------------------------------------------------------------------------------
+		LDA #<s_mb_dialog		; Show dialog keyboard options
+		PHA
+		LDA #>s_mb_dialog
+		PHA
+		LDX # 0
+		LDY # 24
+		JSR puts_xy
+		LDA #<s_mx_dialog
+		PHA
+		LDA #>s_mx_dialog
+		PHA
+		LDX # 34
+		LDY # 24
+		JSR puts_xy
+		RTS
+
+
+;==============================================================================
+; STRINGS
+;==============================================================================
+	.t = petscii_white
+	.a = petscii_lgreen
+	.m = petscii_green
+	.D = petscii_grey
+	.d = petscii_dgrey
+	.ron = petscii_rvs_on
+	.roff = petscii_rvs_off
+
+s_mb_dialog		!pet petscii_up, .m, .ron, "Move:"
+s_mb_dialog_left	!pet .a, .roff, "Left",		.m, .ron, "/"
+s_mb_dialog_right	!pet .a, .roff, "Right",	.m, .ron, "/"
+s_mb_dialog_home	!pet .a, .roff, "Home",		.m, .ron, "            "
+s_mb_dialog_apply	!pet .a, .roff, $5f, $bd, 	.m, .ron, "Accept"
+			;!pet 13
+			!pet "Edit:"
+s_mb_dialog_ins		!pet .a, .roff, "INS",		.m, .ron, "/"
+s_mb_dialog_del		!pet .a, .roff, "DEL",		.m, .ron, "/"
+s_mb_dialog_clr		!pet .a, .roff, "CLR",		.m, .ron
+			!pet "                  ", .roff
+			!pet 0
+
+s_mx_dialog		!pet .a, .roff, $5f, .m, .ron, "Abort", 0
+
+
+} ; TB_INPUT_BOX
+
+
+;==============================================================================
+;EOF

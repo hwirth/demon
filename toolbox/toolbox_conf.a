@@ -1,0 +1,247 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+; This is the Toolbox configuration file. You can set some values and define,
+; which modules and functions are linked into the binary, minimizing file size.
+;------------------------------------------------------------------------------
+; Include this file before any other Toolbox files. The ACME assembler can get
+; confused, when some defines are not yet existing. Therefore, we define
+; everything before including any source that uses  !ifdef .
+;------------------------------------------------------------------------------
+
+
+;==============================================================================
+!zone TOOLBOX_SETTINGS
+;==============================================================================
+; Colors are used by the menu system and getkey (cursor color).
+; You should set cram* and pet* to equivalent values (duh). Not all values are
+; currently in use.
+;------------------------------------------------------------------------------
+; Using defines for the colors is somewhat rigid, because you can't change the
+; color scheme in run time. Otoh, they make menu definition strings neater.
+;------------------------------------------------------------------------------
+
+	.ct = cram_black
+	.pt = petscii_black
+	.cb = cram_white
+	.pb = petscii_white
+
+
+	ccolor_background	= .cb
+	ccolor_frame		= cram_red
+	ccolor_frame_ext	= cram_black
+	ccolor_text		= .ct
+	ccolor_cursor		= ccolor_text
+	ccolor_menu		= ccolor_frame
+	ccolor_menu_active	= cram_lred
+	ccolor_menu_disabled	= cram_grey
+	ccolor_bracket		= cram_grey
+	ccolor_select		= cram_green
+	ccolor_highlight	= cram_white
+	ccolor_error 		= cram_lred
+
+	pcolor_background	= .pb
+	pcolor_frame		= petscii_red
+	pcolor_frame_ext	= petscii_black
+	pcolor_text		= .pt
+	pcolor_cursor		= pcolor_text
+	pcolor_menu		= pcolor_frame
+	pcolor_menu_active	= petscii_lred
+	pcolor_menu_disabled	= petscii_grey
+	pcolor_bracket		= petscii_grey
+	pcolor_select		= petscii_green
+	pcolor_highlight	= petscii_white
+	pcolor_error		= petscii_lred
+
+
+;------------------------------------------------------------------------------
+; Some programs need to keep track, which menu/screen is currently active
+; Define unique  screenid*  values here
+;------------------------------------------------------------------------------
+	;screenid_main_menu	= 1
+
+
+;==============================================================================
+!zone TOOLBOX_HOOKS
+;==============================================================================
+; Some modules provide the option to call hook functions in certain locations.
+; This makes it possible for your program to enhance these functions without
+; changing the Toolbox sources.
+
+	;GETKEY_HOOK		= 1	; JSR custom_getkey_handler
+	;IRQ_HOOK		= 1	; JSR custom_irq_handler
+
+
+;==============================================================================
+!zone TOOLBOX_OPTIONS
+;==============================================================================
+; Some modules provide special options:
+
+	GETKEY_BEEP		= 1	; Make a sound after each key press
+					; If beep disabled, screen will flash
+
+	GETKEY_IRQ_BLINK	= 1	; IRQ increases cursor_count
+
+	GETKEY_REPEAT_FLAG	= $00	; Enable repeating keys:
+	GETKEY_REPEAT_FIRST	= $30	;   $80=all, $7f=none, $00=control keys
+	GETKEY_REPEAT_SPEED	= $03
+	IRQ_MENU		= 1	; ISR is used to enhance the menu
+	;CUSTOM_RASTER_0	= 1	; Use special raster line
+	LOWER_CASE_MENU		= 1	; Menu always in lower case?
+
+
+;==============================================================================
+!zone TOOLBOX_MODULE_SELECT
+;==============================================================================
+; This zone allows the complete disabling of a module, so you can reduce the
+; size of your binary. Some modules depend on others as mentioned:
+
+	TOOLBOX_CONSTANTS	= 1	; Generates no code, provides defs only
+	TOOLBOX_HELPERS		= 1	; (puts, getkey)
+	TOOLBOX_MENU_COLORS	= 1
+	TOOLBOX_RASTER_IRQ	= 1	; (OPT) Better cursror blink
+	TOOLBOX_SYSPARAMS	= 1
+	TOOLBOX_GETKEY		= 1
+	TOOLBOX_SCROLL		= 1
+	TOOLBOX_PUTS		= 1
+	TOOLBOX_PUTS_WRAPPERS	= 1
+	TOOLBOX_MENU_COLORS	= 1
+	TOOLBOX_PRINT_MENU	= 1
+	TOOLBOX_DIALOG		= 1
+	TOOLBOX_FLOPPY		= 1
+	TOOLBOX_SECTOR		= 1
+
+
+;==============================================================================
+!zone TOOLBOX_FUNCTION_SELECT
+;==============================================================================
+
+; TOOLBOX_HELPERS
+;------------------------------------------------------------------------------
+	TB_SAVE_RESTORE_ZP	= 1
+	TB_SLEEP		= 1	; (OPT?)
+	TB_SID_BEEP		= 1	; (OPT)
+	TB_VSYNC		= 1	; (USR)
+	TB_LO_HI_NIBBLES	= 1
+	TB_BYTE_TO_HEX		= 1
+	TB_BYTE_TO_STR		= 1
+	TB_WORD_TO_STR		= 1
+	TB_PETSCII_SCREEN_CONV	= 1
+	TB_TO_UPPER_LOWER_CASE	= 1
+	TB_GET_VISUAL_STRLEN	= 1	; (print_menu)
+	TB_VRAM_READ_BYTE	= 1	; (USR)
+	TB_DETECT_PAL_NTSC	= 1	; (USR)
+
+
+; TOOLBOX_RASTER_IRQ
+;------------------------------------------------------------------------------
+	LOWER_CASE_MENU 	= 1	; Keep the menu bars in lower case
+
+
+; TOOLBOX_SCROLL
+;------------------------------------------------------------------------------
+	TB_SCROLL_UP		= 1	; (puts)
+	TB_SCROLL_DOWN		= 1	; (puts)
+	TB_SAVE_SCREEN		= 1	; (dialog)
+	TB_LOAD_SCREEN		= 1	; (dialog)
+
+
+; TOOLBOX_PUTS
+;------------------------------------------------------------------------------
+	TB_PUTS_SAVE_ZP		= 1	; (OPT) Keep values in $f7..$ff intact
+	TB_PUTS_SAVE_STATE	= 1	; (OPT?) color, rvs, crsrx/y <--> stack
+	TB_GET_UPDATE_VPTR	= 1
+	TB_GOTO_XY		= 1
+	TB_GET_COLOR_CODE	= 1	; --> opt
+	TB_COLOR_CODE_TAB	= 1	; --> opt
+	TB_CHECK_PRINTABLE_CHAR	= 1	; --> opt
+	TB_PUTS			= 1
+
+
+; TOOLBOX_PUTS_WRAPPERS
+;------------------------------------------------------------------------------
+	TB_GOTO_POS0		= 1
+	TB_GOTO_EOL		= 1
+	TB_MENU_HOME		= 1	; --> opt
+	TB_PUTC			= 1
+	TB_SPUTC		= 1
+	TB_PUTS_XY		= 1
+	TB_PUTS_NEWLINE		= 1
+	TB_PUTS_RVS		= 1
+	TB_RPUTS_XY		= 1
+	TB_PUTS_STRBYTE		= 1
+	TB_PUTS_HEXBYTE		= 1
+	TB_PUTS_STRWORD		= 1
+
+
+; TOOLBOX_MENU_COLORS
+;------------------------------------------------------------------------------
+	TB_LOAD_COLORS		= 1
+	TB_LOAD_SYSTEM_COLORS	= 1
+
+
+; TOOLBOX_PRINT_MENU
+;------------------------------------------------------------------------------
+	TB_MENU_SAVE_STATE	= 1	; (USR)
+	TB_CLEAR_ROW		= 1	; (print_menu)
+	TB_EMPTY_TOP_ROW	= 1	; (USR?)
+	TB_PRINT_MENU		= 1
+	TB_S_TOP_MENU		= 1	; (print_menu)
+	TB_S_BOTTOM_MENU	= 1	; (print_menu)
+	TB_S_SPACE_40		= 1	; (print_menu)
+
+
+; TOOLBOX_GETKEY
+;------------------------------------------------------------------------------
+	; Nothing to configure here
+
+
+; TOOLBOX_DIALOG
+;------------------------------------------------------------------------------
+	TB_DRAW_BOX		= 1	; (text_box)
+	TB_TEXT_BOX		= 1	; (dialog_box)
+	TB_DIALOG_BOX		= 1	; (input_box)
+	TB_INPUT_BOX		= 1	; (USR)
+
+
+; TOOLBOX_FLOPPY
+;------------------------------------------------------------------------------
+	TB_DISK_COMMAND		= 1	; (OPT)
+	TB_DISK_ERROR		= 1	; (OPT)
+	TB_SECTORS_PER_TRACK	= 1	; (OPT)
+	TB_SAVE_TO_FILE		= 1	; (OPT)
+	TB_LOAD_FROM_FILE	= 1	; (OPT)
+	TB_S_DOS_COMMAND	= 1	; (OPT) 40 char buffer for the user
+
+
+; TOOLBOX_SECTOR
+;------------------------------------------------------------------------------
+	TB_RWSECT_COMMON	= 1
+	TB_SECTOR_READ		= 1
+	TB_SECTOR_WRITE		= 1
+
+
+;==============================================================================
+!zone TOOLBOX_INCLUDES
+;==============================================================================
+
+!convtab SCR
+!ifdef TOOLBOX_CONSTANTS	{ !source "toolbox/constants.a"     }
+!ifdef TOOLBOX_HELPERS		{ !source "toolbox/helpers.a"       }
+!ifdef TOOLBOX_RASTER_IRQ	{ !source "toolbox/raster_irq.a"    }
+!ifdef TOOLBOX_SYSPARAMS	{ !source "toolbox/sysparams.a"     }
+!ifdef TOOLBOX_PUTS		{ !source "toolbox/puts.a"          }
+!ifdef TOOLBOX_PUTS_WRAPPERS	{ !source "toolbox/puts_wrappers.a" }
+!ifdef TOOLBOX_SCROLL		{ !source "toolbox/scroll.a"        }
+!ifdef TOOLBOX_MENU_COLORS	{ !source "toolbox/menu_colors.a"   }
+!ifdef TOOLBOX_PRINT_MENU	{ !source "toolbox/print_menu.a"    }
+!ifdef TOOLBOX_GETKEY		{ !source "toolbox/getkey.a"        }
+!ifdef TOOLBOX_DIALOG		{ !source "toolbox/dialog.a"        }
+!ifdef TOOLBOX_FLOPPY		{ !source "toolbox/floppy.a"        }
+!ifdef TOOLBOX_SECTOR		{ !source "toolbox/sector.a"        }
+!convtab PET
+
+
+;==============================================================================
+!eof

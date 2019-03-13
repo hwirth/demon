@@ -1,0 +1,82 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef TB_PUTS_STRWORD {
+
+
+;==============================================================================
+!zone ELFN_HEX_DEC
+;==============================================================================
+
+.error		JMP line_show_error
+
+elfn_to_hex
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_dec	; Look for decimal number and convert
+		BCS .error
+
+		PHA			; Save converted value
+		TXA
+		PHA
+
+		JSR goto_first_space
+
+		LDA #'='		; Print '=$'
+		JSR putc
+		LDA #'$'
+		JSR putc
+
+		PLA			; Print value as hex numbers
+		TAX
+		PLA
+		BEQ .skip_hibyte
+		JSR puts_hexbyte
+.skip_hibyte	TXA
+		JSR puts_hexbyte
+
+		CLC			; Trigger newline
+		RTS
+
+
+elfn_to_dec
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_int16	; Check for 4 nibble hex value
+		BCS .try_int8		; No success? Try looking for 2 nibbles
+
+		JSR .print_equals_dec
+		JSR word_to_str
+		JSR puts_strword
+		TXA
+		CLC			; Trigger newline
+		RTS
+
+.try_int8	LDY # 1			; Look for one byte hex value
+		JSR line_expect_int8
+		BCS .error
+		JSR .print_equals_dec	; Print '=#'
+.low_byte	JSR byte_to_str
+		JSR puts_strbyte
+		CLC			; Trigger newline
+		RTS
+
+
+.print_equals_dec
+;------------------------------------------------------------------------------
+		PHA
+
+		JSR goto_first_space	; Print '=#'
+
+		LDA #'='
+		JSR putc
+		LDA #'#'
+		JSR putc
+
+		PLA
+		RTS
+
+}
+;==============================================================================
+!eof

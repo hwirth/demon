@@ -1,0 +1,180 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+cramcolor_background	!byte cram_white
+cramcolor_frame		!byte cram_grey
+cramcolor_frame_ext	!byte cram_black
+cramcolor_text		!byte cram_black
+cramcolor_cursor	!byte cram_black
+cramcolor_menu		!byte cram_grey
+cramcolor_menu_active	!byte cram_white
+cramcolor_menu_disabled	!byte cram_dgrey
+cramcolor_bracket	!byte cram_grey
+cramcolor_select	!byte cram_green
+cramcolor_highlight	!byte cram_blue
+cramcolor_error 	!byte cram_red
+
+petcolor_background	!byte petscii_white
+petcolor_frame		!byte petscii_grey
+petcolor_frame_ext	!byte petscii_black
+petcolor_text		!byte petscii_black
+petcolor_cursor		!byte petscii_black
+petcolor_menu		!byte petscii_grey
+petcolor_menu_active	!byte petscii_white
+petcolor_menu_disabled	!byte petscii_dgrey
+petcolor_bracket	!byte petscii_grey
+petcolor_select		!byte petscii_green
+petcolor_highlight	!byte petscii_blue
+petcolor_error		!byte petscii_red
+
+
+!ifdef TB_LOAD_COLORS {
+
+;=============================================================================
+!zone SCREENCOLOR_TO_PETSCII
+;=============================================================================
+
+petsciicolor_to_screen
+;-----------------------------------------------------------------------------
+		LDY # 15
+.loop		CMP .color_table,Y
+		BEQ .found
+		DEY
+		BPL .loop
+.found		TYA
+		RTS
+
+.color_table	!byte	petscii_black,	petscii_white,	petscii_red
+		!byte	petscii_cyan,	petscii_purple,	petscii_green
+		!byte	petscii_blue,	petscii_yellow,	petscii_orange
+		!byte	petscii_brown,	petscii_lred,	petscii_dgrey
+		!byte	petscii_grey,	petscii_lgreen,	petscii_lblue
+		!byte	petscii_lgrey
+
+
+;=============================================================================
+!zone LOAD_COLORS
+;=============================================================================
+
+.raddr		!byte 0,0
+
+load_colors
+;-----------------------------------------------------------------------------
+		PLA
+		STA .raddr
+		PLA
+		STA .raddr+1
+
+		PLA
+		STA petcolor_error
+		JSR petsciicolor_to_screen
+		STA cramcolor_error
+
+		PLA
+		STA petcolor_highlight
+		JSR petsciicolor_to_screen
+		STA cramcolor_highlight
+
+		PLA
+		STA petcolor_select
+		JSR petsciicolor_to_screen
+		STA cramcolor_select
+
+		PLA
+		STA petcolor_bracket
+		JSR petsciicolor_to_screen
+		STA cramcolor_bracket
+
+		PLA
+		STA petcolor_menu_disabled
+		JSR petsciicolor_to_screen
+		STA cramcolor_menu_disabled
+
+		PLA
+		STA petcolor_menu_active
+		JSR petsciicolor_to_screen
+		STA cramcolor_menu_active
+
+		PLA
+		STA petcolor_menu
+		JSR petsciicolor_to_screen
+		STA cramcolor_menu
+
+		PLA
+		STA petcolor_cursor
+		JSR petsciicolor_to_screen
+		STA cramcolor_cursor
+
+		PLA
+		STA petcolor_text
+		JSR petsciicolor_to_screen
+		STA cramcolor_text
+
+		PLA
+		STA petcolor_frame_ext
+		JSR petsciicolor_to_screen
+		STA cramcolor_frame_ext
+
+		PLA
+		STA petcolor_frame
+		JSR petsciicolor_to_screen
+		STA cramcolor_frame
+
+		PLA
+		STA petcolor_background
+		JSR petsciicolor_to_screen
+		STA cramcolor_background
+
+;-----------------------------------------------------------------------------
+
+		LDA cramcolor_background
+		STA $d021
+		LDA cramcolor_frame
+		STA $d020
+
+		LDA .raddr+1
+		PHA
+		LDA .raddr
+		PHA
+		RTS
+
+} ; TB_LOAD_COLORS
+
+
+!ifdef TB_LOAD_SYSTEM_COLORS {
+;=============================================================================
+!zone LOAD_SYSTEM_COLORS
+;=============================================================================
+
+load_system_colors
+;-----------------------------------------------------------------------------
+		LDA zp_crsr_color
+		STA cramcolor_text
+		STA cramcolor_cursor
+		JSR screen_to_petscii
+		STA petcolor_text
+		STA petcolor_cursor
+
+		LDA vic_frame_color
+		STA cramcolor_frame
+		STA cramcolor_frame_ext
+		JSR screen_to_petscii
+		STA petcolor_frame
+		STA petcolor_frame_ext
+
+		LDA vic_background_color
+		STA cramcolor_background
+		JSR screen_to_petscii
+		STA petcolor_background
+
+		RTS
+
+} ; TB_LOAD_SYSTEM_COLORS
+
+
+
+;=============================================================================
+!eof
+

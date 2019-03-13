@@ -1,0 +1,517 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef BROWSE_HELP {
+
+
+;==============================================================================
+!zone ELFN_HELP
+;==============================================================================
+
+.s_base_help	!scr "MAIN.HLP", 0
+.s_file_name	!scr 13
+.s_help_file	!scr "MAIN.HLP",0,0,0,0, 0	; Max. 8 chars for topic group
+.s_not_found	!pet 13, "not found", 0
+.s_error	!pet 13, "error ", 0
+
+.checksum	!byte 0,0
+
+	.dos_device	= 10
+	.load_addr	= $c000			; Needs to end in $xx00
+	.end_addr	= $d000
+
+	.hptr		= $f7
+	.temp		= $f9
+	.pass		= $fa			; Rerun help, if not found
+	.sptr		= $fc			; Pointer for special functions
+
+	.section_marker	= 'X'
+	.strbuf		= TAPE_BUFFER
+
+.file_error
+	DEC $d020
+		PHA
+		LDA #<.s_error
+		PHA
+		LDA #>.s_error
+		PHA
+		JSR puts
+		PLA
+		JSR puts_hexbyte
+		CLC
+.exit		RTS
+
+.error		JMP line_show_error
+
+elfn_help
+;==============================================================================
+		LDA # 0
+		STA .pass		; First try
+
+.retry_help	LDY # 1
+		JSR line_expect_rest
+		TYA
+		PHA
+
+		LDA #.section_marker	; Prepare search term for comparison
+		STA .strbuf		; with help text
+		LDA # 0
+		STA .strbuf,Y		; Add EOS marker
+.loop_convert	LDA .strbuf,Y		; Convert characters
+		BEQ .skip_convert
+		JSR screen_to_petscii
+		STA .strbuf,Y
+.skip_convert	DEY
+		BNE .loop_convert	; Except the first one, we just placed
+
+		PLA
+		CMP # 1
+		BNE .skip_caption
+		LDA #<.s_file_name
+		PHA
+		LDA #>.s_file_name
+		PHA
+		JSR puts
+.skip_caption
+
+		JSR help_opcode		; Check if ?<opcode> was input
+		BCC .exit
+
+		JSR .get_checksum	; Check, if help data still untouched
+		CMP .checksum
+		BNE .load_from_file
+		CPX .checksum+1
+		BNE .load_from_file
+
+		LDA .load_addr
+		CMP #.section_marker
+		BEQ .help_loaded
+
+.load_from_file	LDA #<.load_addr	; Checksum bad, load from disk
+		PHA
+		LDA #>.load_addr
+		PHA
+		LDA #<.s_help_file
+		PHA
+		LDA #>.s_help_file
+		PHA
+		LDA #.dos_device
+		PHA
+	INC $d020
+		JSR load_from_file
+
+		BNE .file_error
+	DEC $d020
+
+		JSR .replace_nl_with_eos
+
+		JSR .get_checksum	; Store checksum for future checks
+		STA .checksum
+		STX .checksum+1
+;------------------------------------------------------------------------------
+.help_loaded	; Search for requested section
+
+		JSR .reset_hptr
+.start_section	LDY # 0
+		LDA .hptr+1		; End of help text reached?
+		CMP #>.end_addr
+		BNE .skip_notfound
+		JMP .term_not_found	; Yes: print "not found"
+.skip_notfound
+.loop_section	LDA (.hptr),Y		; Load char from help text
+		BEQ .section_eos	; End of string?
+		CMP #.section_marker	; Section marker?
+		BEQ .check_search_term	; Yes: compare to search term
+		INY
+		BNE .loop_section
+
+.section_eos	JSR .add_y_to_hptr	; Move pointer to next sentence
+		JMP .start_section	; Will always jump
+
+.check_search_term
+		INY			; Check for double marker = file end
+		LDA (.hptr),Y
+		CMP #.section_marker
+		BEQ .term_not_found
+		DEY
+.loop_term	LDA (.hptr),Y		; Load char from help text
+		CMP .strbuf,Y		; Compare to search term
+		BNE .not_equal
+		CMP # 0
+		BEQ .equal		; End of string? Comparison successful.
+		INY			; Select next character
+		BNE .loop_term		; Will always jump
+
+.not_equal	INY			; Skip non-fitting search term
+		LDA (.hptr),Y
+		BNE .not_equal		; EOS? No: continue search
+		JSR .add_y_to_hptr	; Select char after EOS
+		JMP .start_section	; Continue search for sections
+
+.equal		JSR .add_y_to_hptr	; Pointer to first sentence of section
+;------------------------------------------------------------------------------
+.load_helpfile	; Check for load command (Capital L)
+
+		LDY # 0
+		LDA (.hptr),Y
+		CMP #'L'
+		BEQ .start_load
+		JMP .show_section
+
+.start_load	LDX # 0
+.loop_load	INY
+		LDA (.hptr),Y
+		BEQ .load_done
+		STA .s_help_file,X
+		INX
+		BNE .loop_load		; Will always jump
+
+.load_done	LDY # 0
+.loop_extension	LDA .s_base_help+4,Y
+		STA .s_help_file,X
+		INX
+		INY
+		CPY # 5
+		BNE .loop_extension
+
+		LDA # 0
+		STA .strbuf+1
+
+		LDA #<.s_file_name	; Show file name
+		PHA
+		LDA #>.s_file_name
+		PHA
+		JSR puts
+
+		JMP .load_from_file
+
+.term_not_found
+;------------------------------------------------------------------------------
+		; Try again with help file name prepended or show error
+		LDA .pass
+		BEQ .try_again
+
+		LDA #<.s_not_found	; Print error message
+		PHA
+		LDA #>.s_not_found
+		PHA
+		JSR puts
+		RTS
+
+.try_again	LDY # 0			; Find length of file name
+.loop_filelen	LDA .s_help_file,Y
+!convtab SCR {	CMP #'.' }
+		BEQ .len_found
+		INY
+		BNE .loop_filelen	; Will always jump
+
+.len_found	STY .temp		; Save file name length
+
+
+		LDY # 0			; Find length of term
+.loop_findlen	INY
+		LDA .strbuf,Y
+		BNE .loop_findlen
+
+		STY $02			; Copy term to the right (making room
+		SEC			; for prepending the file name)
+		LDA .temp
+		ADC $02
+		TAX
+
+.loop_conv	LDA .strbuf,Y
+		BEQ .dont_conv
+		JSR petscii_to_screen	; Convert back to screen code
+.dont_conv	STA .strbuf,X
+		DEX
+		DEY
+		BNE .loop_conv
+
+		LDY .temp		; Copy current help file name (sans
+		DEY			; dot and extension) to freed up area
+.loop_copyfile	LDA .s_help_file,Y
+		JSR petscii_to_screen
+		STA .strbuf+1,Y
+		DEY
+		BPL .loop_copyfile
+
+		LDY .temp		; Fill the gap between file name and
+		INY			; moved search term with a space char
+		LDA #' '
+		STA .strbuf,Y
+
+		INC .pass		; Remember, that we tried again
+		JMP .retry_help
+
+;------------------------------------------------------------------------------
+.show_section	; Print section to screen
+
+.print_sentence	LDY # 0			; Look for section start marker
+		LDA (.hptr),Y
+		CMP #.section_marker
+		BEQ .section_end
+
+		JSR puts_newline	; Print line
+
+		LDA (.hptr),Y		; Special functions
+		CMP #'A'
+		BCC .print_line
+		CMP #'Z'+1
+		BCS .print_line
+		JSR .special_command
+		JMP .section_end
+
+.print_line	LDA .hptr
+		PHA
+		LDA .hptr+1
+		PHA
+		JSR puts
+
+		JSR .get_sentence_length	; Search for EOS
+		CLC			; Add line length to base pointer
+		ADC .hptr
+		STA .hptr
+		LDA .hptr+1
+		ADC # 0
+		STA .hptr+1
+
+		JMP .print_sentence
+
+.section_end	CLC		; Trigger newline
+		RTS
+
+
+.reset_hptr
+;------------------------------------------------------------------------------
+		LDA #<.load_addr
+		STA .hptr
+		LDA #>.load_addr
+		STA .hptr+1
+		RTS
+
+
+.add_y_to_hptr
+;------------------------------------------------------------------------------
+		CLC
+		INY
+		TYA
+		ADC .hptr
+		STA .hptr
+		LDA .hptr+1
+		ADC # 0
+		STA .hptr+1
+		RTS
+
+
+.get_sentence_length
+;------------------------------------------------------------------------------
+		LDY # 0
+.loop_length	LDA (.hptr),Y		; Check for newline or already replaced
+		BEQ .nl_found
+		INY
+		BNE .loop_length
+
+.nl_found	INY
+		TYA
+		RTS
+
+
+.replace_nl_with_eos
+;------------------------------------------------------------------------------
+		JSR .reset_hptr
+		LDY # 0
+.loop_replace	LDA (.hptr),Y
+		CMP #petscii_newline
+		BNE .skip_replace
+		LDA # 0
+		STA (.hptr),Y
+.skip_replace	INY
+		BNE .loop_replace
+		INC .hptr+1
+		LDX .hptr+1
+		CPX #>.end_addr
+		BNE .loop_replace
+
+		RTS
+
+
+.get_checksum
+;==============================================================================
+		; Calculate 16-bit check sum
+
+		JSR .reset_hptr
+		LDA #$00
+		STA .temp
+		TAY
+.add_byte	CLC
+		ADC (.hptr),Y
+		ROL
+		BCC .skip_rol_hi
+		INC .temp
+.skip_rol_hi	INY
+		BNE .add_byte
+		INC .hptr+1
+		LDX .hptr+1
+		CPX #>.end_addr
+		BNE .add_byte
+
+		LDX .temp		; Return sum in .A/.X
+		RTS
+
+
+.special_command
+;==============================================================================
+		CMP #'O'
+		BEQ .special_opcodes
+		RTS
+
+.special_opcodes
+;------------------------------------------------------------------------------
+		LDA #<mnemonic_names
+		STA .sptr
+		LDA #>mnemonic_names
+		STA .sptr+1
+
+		LDA #' '
+		STA .strbuf+3
+		LDA # 0
+		STA .strbuf+4
+
+.loop_sopc	LDY # 0
+		LDA (.sptr),Y
+		STA .strbuf
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+1
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+2
+
+		LDA #<.strbuf
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		CLC
+		LDA .sptr
+		ADC # 3
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+
+		LDA .sptr
+		CMP #<mBRK+3
+		BNE .skip_illegal
+		JSR puts_newline
+.skip_illegal
+		CMP #<mKIL
+		BCC .loop_sopc
+
+		;JSR puts_newline
+
+		RTS
+
+
+;==============================================================================
+!zone HELP_OPCODE
+;==============================================================================
+
+	.sptr = $fc
+	.strbuf = TAPE_BUFFER
+	.asmbuf = sr_zp_backup
+
+help_opcode
+;------------------------------------------------------------------------------
+		TYA
+		PHA
+
+		LDA #<mnemonic_names
+		STA .sptr
+		LDA #>mnemonic_names
+		STA .sptr+1
+
+.loop_find_opc	LDY # 2
+.next_char	LDA (.sptr),Y
+		CMP .strbuf+1,Y
+		BNE .next_opc
+		DEY
+		BPL .next_char
+		JMP .show_opc_info
+
+.next_opc	CLC
+		LDA .sptr
+		ADC # 3
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+
+		LDA .sptr
+		CMP #<mKIL
+		BCC .loop_find_opc
+
+		PLA			; No opcode found, start normal help
+		TAY
+		SEC
+		RTS
+
+;------------------------------------------------------------------------------
+		; Opcode found, list all variants
+
+.show_opc_info	LDA illegal_opcs
+		PHA
+		LDA #$ff
+		STA illegal_opcs
+
+		LDA #$00
+		STA .asmbuf+1
+		LDA #$ff
+		STA .asmbuf+2
+
+		LDY # 0
+.loop_opc_info	LDA opcode_matrix,Y
+		CMP .sptr		; .sptr is pointer to queried opcode
+		BNE .skip_entry
+		JSR .show_entry		; Opcode points to mXXX (.sptr)
+.skip_entry	INY
+		BNE .loop_opc_info
+
+		PLA
+		STA illegal_opcs
+
+		PLA			; .Y not needed
+		CLC
+		RTS
+
+.show_entry
+;------------------------------------------------------------------------------
+		STY .asmbuf
+
+		TYA
+		PHA
+		LDA .sptr
+		PHA
+		LDA .sptr+1
+		PHA
+
+		JSR puts_newline
+
+		LDX #<.asmbuf
+		LDA #>.asmbuf
+		JSR disassemble_single_line
+
+		PLA
+		STA .sptr+1
+		PLA
+		STA .sptr
+		PLA
+		TAY
+		RTS
+
+
+} ; BROWSE_HELP
+;==============================================================================
+!eof

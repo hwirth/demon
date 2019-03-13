@@ -1,0 +1,160 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone GLOBAL_VARIABLES
+;==============================================================================
+; Some of these variables are also used by other functions for completely
+; different purposes, to reduce memory usage. Any recycling is mentioned in the
+; comments.
+
+
+;==============================================================================
+; elfn_go.a
+;==============================================================================
+
+; Client context record
+;------------------------------------------------------------------------------
+client_ctxrec
+client_pc	!word $1234		; Program counter (next instruction)
+client_irqv	!byte 0,0		; IRQ vector at $0314
+;client_nmiv	!byte 0,0		; NMI vector at $0316
+client_bank	!byte 0			; ROM visibility configuration in $01
+client_sptr	!byte 0			; Stack pointer
+client_akku	!byte 0			; .A register
+client_xreg	!byte 0			; .X register
+client_yreg	!byte 0			; .Y register
+client_sreg	!byte 0			; Status register
+client_ctxrec_end
+
+
+; Monitor context record
+;------------------------------------------------------------------------------
+monitor_ctxrec
+monitor_pc	!word $1234		; Program counter (next instruction)
+monitor_irqv	!byte 0,0		; IRQ vector at $0314
+;monitor_nmiv	!byte 0,0		; NMI vector at $0316
+monitor_bank	!byte 0			; ROM visibility configuration in $01
+monitor_sptr	!byte 0			; Stack pointer
+monitor_akku	!byte 0			; .A register
+monitor_xreg	!byte 0			; .X register
+monitor_yreg	!byte 0			; .Y register
+monitor_sreg	!byte 0			; Status register
+
+
+; Monitor control data
+;------------------------------------------------------------------------------
+orig_brk_vector	!byte 0,0		; Break vector in monitor context
+orig_nmi_vector	!byte 0,0		; Original NMI service routine
+step_mode	!byte 0			; Normal call, step or trace
+step_opc_save_a0	!byte 0		; BRKs are written over the instuctions
+step_opc_save_a1	!byte 0
+step_opc_save_b0	!byte 0		; after the one about to be executed
+step_opc_save_b1	!byte 0
+step_brk_addr_a	!byte 0,0		; The addresses of those BRKs are kept,
+step_brk_addr_b	!byte 0,0		; for restoring the original opcs later
+
+nmi_brk_addr	!byte 0,0
+nmi_brk_save	!byte 0
+
+
+;==============================================================================
+; eval_line.a
+;==============================================================================
+
+param_1		!byte 0,0		; Temporary variables for int16 values
+param_2		!byte 0,0		; of read-in parameters
+el_command	!byte 0			; Pass used command character to elfn_*
+					; functions
+
+;==============================================================================
+; elfn_assemble.a
+;==============================================================================
+
+clear_start
+mnem_temp	!byte 0,0,0		; Holds 3 chars when comparing mnemonic
+amode_pre_1	!byte 0			; Holds '#' or '(' signs, if found
+amode_pre_2	!byte 0			; Holds '$' sign before operand
+mnem_param	!byte 0,0,0,0		; Holds up to 4 chars (operand nibbles)
+amode_post_1	!byte 0			; Holds ',' or ')', if found
+amode_post_2	!byte 0			; Holds 'X', 'Y' or ',', if found
+amode_post_3	!byte 0			; Holds 'X' or 'Y', if found
+clear_end
+
+addr_lo		!byte 0			; Value of address at beginning of
+addr_hi		!byte 0			; input string (for aREL)
+
+asm_ilen	!byte 0			; Length of assembled instruction
+asm_opcode	!byte 0			; Assembled instruction (return value)
+asm_operand_lo	!byte 0			; Assembled instruction (return value)
+asm_operand_hi	!byte 0			; Assembled instruction (return value)
+
+
+;==============================================================================
+; elfn_direct.a
+;==============================================================================
+
+direct_command	!byte 0
+
+
+;==============================================================================
+; elfn_disassemble.a
+;==============================================================================
+
+dass_temp_lo	!byte 0			; Operand; Address, an aREL points to
+dass_temp_hi	!byte 0
+
+
+;==============================================================================
+; elfn_hexdump.a
+;==============================================================================
+
+hexd_address	!byte 0,0		; These bytes are also used by
+hexd_offset	!byte 0,0		;  elfn_symbol.a  as temp string buffer
+
+hexd_buffer	!byte 0,0,0,0, 0,0,0,0	; One byte used as  .temp  in
+					;elfn_disassemble.a:check_print_divider
+hexd_colors	!byte 0,0,0,0, 0,0,0,0
+hexd_temp	!byte 0
+
+	force_unknown_opc = hexd_temp	; Flag for disassemble to show the byte
+					; and not the full instruction (scroll)
+	scroll_opcode = hexd_temp-1	; Temp storage for disassembled op
+
+
+;==============================================================================
+; elfn_illegals.a
+;==============================================================================
+
+illegal_opcs	!byte 0
+
+
+;==============================================================================
+; elfn_transfer.a
+;==============================================================================
+
+workspace_start	!word heap
+workspace_end	!word $9fff
+
+
+;==============================================================================
+; system_state.a
+;==============================================================================
+
+prev_rom_config !byte 0			; Used as temp storage  .opcode  in
+					; opcode_matrix.a:get_instruction_len
+roms_raddr	!byte 0,0
+roms_akku	!byte 0
+
+switch_raddrs	!byte 0,0, 0,0
+switch_sptr	!byte 0
+
+sr_zp_backup	!byte 0,0, 0,0, 0,0, 0,0, 0	; Also used as .asmbuf in
+						;  elfn_help.a:help_opcode
+
+
+;==============================================================================
+!eof

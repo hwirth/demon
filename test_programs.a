@@ -1,0 +1,89 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone TEST_PROGRAMS
+;==============================================================================
+
+
+!ifdef TEST_PROGRAM {
+
+	.sptr	= $fe		;zero page pointer
+
+test_program
+;------------------------------------------------------------------------------
+.loop		LDX #<.string
+		LDY #>.string
+
+		STX .sptr
+		STY .sptr+1
+		LDY #0
+
+.next_char	LDA (.sptr),Y
+		BEQ .done
+
+		JSR $ffd2	; BSOUT
+		INY
+		BNE .next_char
+
+.done		LDX # 0
+.loop_x		LDY # 0
+.loop_y		DEY
+		BNE .loop_y
+		DEX
+		BNE .loop_x
+		JMP .loop
+
+
+.string		!pet petscii_green, "hello, world! ", 0
+}
+
+
+!ifdef TEST_BREAK_POINTS {
+;------------------------------------------------------------------------------
+.a		LDA #$12	; Jump around a little to see, if our stepper
+		JMP .b		; places the BRK-breakpoints correctly
+		NOP
+		NOP
+.b		JMP (.vect)
+		NOP
+		NOP
+.c		BEQ .a
+		BNE .b
+		NOP
+		NOP
+		NOP
+		BRK
+.vect		!word .c
+;------------------------------------------------------------------------------
+}
+
+
+!ifdef TEST_BRANCHES {
+;------------------------------------------------------------------------------
+!align $ff, $00			; Place some BNEs to see, if we calculated the
+				; target addresses correctly
+!for a, 64 {	BNE .test }
+.test
+!for b, 64 {	BNE .test }
+;------------------------------------------------------------------------------
+}
+
+!ifdef TEST_HEXDUMP {
+*=$5000
+	!for a, 256 {
+		!byte a-1
+	}
+	!for a, 256 {
+		!byte $58
+	}
+	!for a, 256 {
+		!byte 256-a
+	}
+}
+
+;==============================================================================
+!eof

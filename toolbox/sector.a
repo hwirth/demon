@@ -1,0 +1,355 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+;=============================================================================
+!zone SECTOR
+;=============================================================================
+
+	sector_bufptr = $f7
+
+
+!ifdef TB_RWSECT_COMMON {
+; rwsect variables
+;-----------------------------------------------------------------------------
+sector_raddr	!byte 0,0
+param_raddr	!byte 0,0
+sector_device	!byte 0
+sector_filenr	!byte 0
+sector_cname	!pet "#"
+sector_ucmd	!byte 0
+		!pet "u1 ?? ? ?? ??"
+sector_pcmd	!byte 0
+		!pet "b-p ?? ?"
+
+} ; TB_RWSECT_COMMON
+
+
+!ifdef TB_RWSECT_COMMON {
+;-----------------------------------------------------------------------------
+!zone SECTOR_GET_PARAMS
+;-----------------------------------------------------------------------------
+!ifdef TOOLBOX {
+sector_get_sys_params
+		LDX #$02		; Reset string lengths to
+		STX sector_ucmd		; LEN("U1")
+		INX
+		STX sector_pcmd		; LEN("B-P")
+
+		JSR get_int		; Device nr. (8-11)
+		STX sector_device
+
+		JSR get_int		; Channel (1-15?)
+		STX sector_filenr
+		JSR .to_ucmd
+		JSR .to_pcmd
+
+		JSR get_int		; Drive (0-1)
+		JSR .to_ucmd
+		JSR .to_pcmd
+
+		JSR get_int		; Track
+		JSR .to_ucmd
+
+		JSR get_int		; Sector
+		JSR .to_ucmd
+		;;LDA #$02      		; file number 2
+
+		JSR get_word		; Buffer address
+		PLA
+		STA sector_bufptr
+		PLA
+		STA sector_bufptr+1
+
+		RTS
+}
+;-----------------------------------------------------------------------------
+sector_get_jsr_params
+		PLA
+		STA param_raddr+1
+		PLA
+		STA param_raddr
+
+		LDX #$02		; Reset string lengths to
+		STX sector_ucmd		; LEN("U1")
+		INX
+		STX sector_pcmd		; LEN("B-P")
+
+		PLA			; Device nr. (8-11)
+		STA sector_device
+
+		PLA			; Drive (0-1)
+		STA sector_filenr
+		TAX
+		JSR .to_ucmd
+		JSR .to_pcmd
+
+		PLA			; Channel (1-15?)
+		TAX
+		JSR .to_ucmd
+		JSR .to_pcmd
+
+		PLA			; Track
+		TAX
+		JSR .to_ucmd
+
+		PLA			; Sector
+		TAX
+		JSR .to_ucmd
+		;;LDA #$02      		; file number 2
+
+		PLA			; Buffer address
+		STA sector_bufptr
+		PLA
+		STA sector_bufptr+1
+
+		LDA param_raddr
+		PHA
+		LDA param_raddr+1
+		PHA
+		RTS
+
+
+; .X to string sector_ucmd
+;-----------------------------------------------------------------------------
+.to_ucmd	LDY sector_ucmd		; Get string length
+		INY			; Increase string length
+		LDA #' '
+		STA sector_ucmd,Y
+
+		TXA			; Keeping original value in X
+		CPX # 10		; Two decimal places?
+		BCC .ucmd_lessthan	; One digit only
+
+		INY			; Increase string length
+		LDA #'1'		; Add '1' for the tens
+		STA sector_ucmd,Y
+
+		TXA			; Restore input value
+		SEC			; Subtract 10
+		SBC # 10
+
+.ucmd_lessthan	INY			; Increase string length
+		CLC
+		ADC #'0'		; Create screen code for the digit
+		STA sector_ucmd,Y	; Store last digit
+
+		STY sector_ucmd		; Update string length
+		RTS
+
+
+; .X to string sector_pcmd
+;-----------------------------------------------------------------------------
+.to_pcmd	LDY sector_pcmd		; Get string length
+		INY			; Increase string length
+		LDA #' '
+		STA sector_pcmd,Y
+
+		TXA			; Keeping original value in X
+		CPX # 10		; Two decimal places?
+		BCC .pcmd_lessthan	; One digit only
+
+		INY			; Increase string length
+		LDA #'1'		; Add '1' for the tens
+		STA sector_pcmd,Y
+
+		TXA			; Restore input value
+		SEC			; Subtract 10
+		SBC # 10
+
+.pcmd_lessthan	INY			; Increase string length
+		CLC
+		ADC #'0'		; Create screen code for the digit
+		STA sector_pcmd,Y	; Store last digit
+
+		STY sector_pcmd		; Update string length
+		RTS
+
+} ; TB_RWSECT_COMMON
+
+
+!ifdef TB_SECTOR_READ {
+;-----------------------------------------------------------------------------
+!zone SECTOR_READ
+;-----------------------------------------------------------------------------
+!ifdef TOOLBOX {
+sys_sector_read
+		JSR sector_get_sys_params
+		JMP .start_sector_read
+}
+jsr_sector_read
+		PLA
+		STA sector_raddr+1
+		PLA
+		STA sector_raddr
+
+		JSR sector_get_jsr_params
+
+		LDA sector_raddr
+		PHA
+		LDA sector_raddr+1
+		PHA
+.start_sector_read
+		LDA #'1'
+		STA sector_ucmd+2
+
+		LDA #01			; String length
+		LDX #<sector_cname
+		LDY #>sector_cname
+		JSR $ffbd		; SETNAM Open the channel file
+
+		LDX sector_device
+		LDA sector_filenr
+		LDY #$02		; Secondary address 2
+		JSR $ffba		; SETLFS
+		JSR $ffc0		; OPEN
+		BCS .error		; Carry set: File could not be opened
+
+		; open the command channel
+		LDA sector_ucmd
+		LDX #<sector_ucmd+1
+		LDY #>sector_ucmd+1
+		JSR $ffbd		; SETNAM
+		LDA #$0F		; File number 15
+		LDX $ba			; Last device used
+		LDY #$0F		; Secondary address 15
+		JSR $ffba		; SETLFS
+
+		JSR $ffc0		; OPEN command channel for U1 command
+		BCS .error		; Carry set: File could not be opened
+
+		; Check drive error channel here to test for
+		; FILE NOT FOUND error etc.
+
+		LDX sector_filenr
+		JSR $ffc6		; CHKIN File 2 now used as input
+
+		LDY #$00
+.loop		JSR $ffcf		; CHRIN Get a byte from file
+		STA (sector_bufptr),Y	; Write byte to memory
+		INY
+		BNE .loop		; Next byte, end after 256 bytes
+
+.close		LDA #$0F		; Filenumber 15
+		JSR $ffc3		; CLOSE
+		LDA sector_filenr
+		JSR $ffc3		; CLOSE
+
+		JSR $ffcc		; CLRCHN
+		RTS
+
+.error		; Akkumulator contains BASIC error code
+		; Most likely errors:
+		; .A = $05 (DEVICE NOT PRESENT)
+
+		;... Error handling for open errors ...
+
+		; Even if OPEN failed, file must be closed
+		PHA
+		JSR .close
+		PLA
+		TAX
+
+		JMP $a437		; ERROR
+
+} ; TB_SECTOR_READ
+
+
+!ifdef TB_SECTOR_WRITE {
+;-----------------------------------------------------------------------------
+!zone SECTOR_WRITE
+;-----------------------------------------------------------------------------
+!ifdef TOOLBOX {
+sys_sector_write
+		JSR sector_get_sys_params
+		JMP .start_sector_write
+}
+jsr_sector_write
+		PLA
+		STA sector_raddr+1
+		PLA
+		STA sector_raddr
+
+		JSR sector_get_jsr_params
+
+		LDA sector_raddr
+		PHA
+		LDA sector_raddr+1
+		PHA
+.start_sector_write
+		LDA #'2'
+		STA sector_ucmd+2
+
+		INC sector_ucmd		; Add CR to the command
+		LDY sector_ucmd
+		LDA #$0D		; CR
+		STA sector_ucmd,Y
+
+		LDA #$01		; String length
+		LDX #<sector_cname
+		LDY #>sector_cname
+		JSR $ffbd		; SETNAM Open the channel file
+
+		LDX sector_device
+		LDA sector_filenr
+		LDY #$02		; Secondary address 2
+		JSR $ffba		; SETLFS
+		JSR $ffc0		; OPEN
+		BCS .error		; Carry set: File could not be opened
+
+		; open the command channel
+		LDA sector_pcmd		; String length
+		LDX #<sector_pcmd+1	; B-P command
+		LDY #>sector_pcmd+1
+		JSR $ffbd		; SETNAM
+		LDA #$0f		; File number 15
+		LDX $ba			; Last device used
+		LDY #$0f		; Secondary address 15
+		JSR $ffba		; SETLFS
+
+		JSR $ffc0		; OPEN command channel for B-P command
+		BCS .error		; Carry set: File could not be opened
+
+		; check drive error channel here to test for
+		; FILE NOT FOUND error etc.
+
+		LDX sector_filenr
+		JSR $ffc9		; CHKOUT File now used as output
+		LDY #$00
+.loop1		LDA (sector_bufptr),Y	; Read byte from memory
+		JSR $ffd2		; BSOUT Write byte to channel buffer
+		INY
+		BNE .loop1		; Next byte, end after 256 bytes
+
+		LDX #$0F		; Filenumber 15
+		JSR $ffc9		; CHKOUT
+		LDY #$00
+.loop2		LDA sector_ucmd+1,Y	; Send sector_ucmd
+		JSR $ffd2		; BSOUT
+		INY
+		CPY sector_ucmd		; String length
+		BNE .loop2
+
+.close		JSR $ffcc		; CLRCHN
+		LDA #$0f
+		JSR $ffc3		; CLOSE
+		LDA sector_filenr
+		JSR $ffc3		; CLOSE
+		JSR $ffcc		; CLRCHN
+		RTS
+
+.error		; Akkumulator contains BASIC error code
+		; Most likely errors:
+		; .A = $05 (DEVICE NOT PRESENT)
+
+		;... Error handling for open errors ...
+
+		; Even if OPEN failed, file must be closed
+		JMP .close
+
+} ; TB_SECTOR_WRITE
+
+
+;=============================================================================
+;EOF

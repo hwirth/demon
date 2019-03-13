@@ -1,0 +1,441 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+; Main file, will include everything else
+
+!cpu 6510			; Enable illegal opcodes
+!to "../demon", cbm		; Output file
+!sl "../demon.sym"		; Symbols table
+!convtab PET			; Character constants are PETSCII
+
+!macro S_PROGRAM_VERSION .dummy {
+	!pet "v0.3.0b"
+}
+
+;==============================================================================
+!zone OPTIONS
+;==============================================================================
+; See also  toolbox_conf.a  for more settings
+
+; BASIC SETTINGS
+;==============================================================================
+	STEP_REGS_AFTER = 1	; Show registers after "g" (step)
+	INIT_ROM_MASK = %111	; ROM visibility for client (BASIC_IO_KERNAL)
+	AUTO_SKIP_BRK = 1	; Do not stand still on a client's BRK
+;------------------------------------------------------------------------------
+	CONTEXT_SAVE_SCREEN = 1	; Keep a copy of VRAM and CRAM for each context
+	CONTEXT_SAVE_CHIPS = 1	; Copy registers of VIC, SID, CIA to context
+	;CONTEXT_HANDLE_IRQ = 1	;; Change IRQ vectors when switching context
+	SAVE_ZP	= 1		; Comment out to DISABLE ZP backup
+!ifdef SAVE_ZP {
+	;OMIT_STACK = 1		; Comment out to ENABLE stack backup
+	NR_ZERO_PAGES = 2	;; Save $02..$ff, $200..$3ff to snapshot,
+} else {			;; OMIT_STACK disabled: Save $02..$3ff
+	OMIT_STACK = 1
+	NR_ZERO_PAGES = 0
+}
+;------------------------------------------------------------------------------
+	;WATCHDOG_ENABLED = 1	;; Call  monitor_panic , if caught in BRK loop
+	WD_BONE = 2		;; Saftey value, reset in  main_menu:.show_menu
+
+
+; FEATURE SELECTION
+;==============================================================================
+	;MIN_CODE_SIZE = 1	; Link as little toolbox functions as possible
+	BELLS_AND_WHISLTES = 1	; Link everything we got
+	;DEMONIC = 1		; Use black/red theme with fancy menu
+	;DEBUG = 1		; Include  debug.a
+;------------------------------------------------------------------------------
+!ifdef MIN_CODE_SIZE {
+	HEAP_SINGLE_BRK = 1	; One BRK on heap to show on startup
+} else {
+	SHOW_BOOT_MESSAGES = 1	; Show status and registers at startup
+	;HEAP_SINGLE_BRK = 1	; One BRK on heap to show on startup
+	SCROLL_CONTINUE = 1	; Scroll through memory areas
+	USE_CONTEXT = 1		; Client runs on its own screen/ZP, etc.
+	REGS_DISASS = 1		; Show upcoming instruction with registers
+	STEP_REGS_COLOR	= 1	; Show regs in grey and save screen estate
+	USE_COLORS = 1		; Use colorful output (HEXDUMP has its own switch)
+}
+!ifdef BELLS_AND_WHISLTES {
+    !ifndef HEAP_SINGLE_BRK {
+	TEST_PROGRAM = 1	; Load a test program at heap
+    }
+	ILLEGAL_OPCODES = 1	; Enable illegal ops toggle
+	FUNCTION_KEYS = 1	; Enable user-defined function keys
+	RELOCATE = 1		; Transfer and adjust absolute addresses
+	WORKSPACE = 1		; Insert/delete instructions with auto-reloc
+	SYMBOLS = 1		; Assign names to addresses
+	SYMBOL_PRESETS = 1	; Pre-assigned symbols
+	NR_SYMBOLS = 6		; Size of symbol_table (Nr. of 256-byte pages)
+	SYMBOL_COLOR = cram_lblue	; CRAM color for symbols (cram_grey)
+	SYMBOL_REC_LEN	= 8	; Max length of a label + 2 byte for address
+	BROWSE_HELP = 1		; Include the help command ("?")
+	;DISASS_DIVIDERS = 1	; Show dividing lines after JMP, RTS, RTI
+	DIVIDER_CHAR = $60	; Char to use for divider line ($60, '-')
+	KEEP_COLOR = 1		; Remember color and restore after a command
+	HEXDUMP_COLORS = 1	; Use colors to indicate memory type
+	WORK_SCREEN = 1		; Use white/red theme, even without TUI
+}
+;------------------------------------------------------------------------------
+!ifdef DEMONIC {
+	TUI_MENU = 1		; Extend screen to left and right
+}
+!ifdef TUI_MENU {
+	USE_IRQ = 1		; Use raster IRQ to expand screen
+    !ifndef WORK_SCREEN {
+	WORK_SCREEN = 1
+    }
+}
+!ifndef NR_SYMBOLS {
+	NR_SYMBOLS = $100/SYMBOL_REC_LEN
+}
+;------------------------------------------------------------------------------
+!ifdef DEBUG {
+	DEBUG_SYS_STATE = 1	; Show extra info about snapshots on startup
+	DEBUG_FILESIZES = 1	; Show sizes of each !src'ed module
+	;SELF_TEST = 1		; If enabled, program will provide self test
+	;TEST_HEXDUMP = 1	; 256 bytes with values 0..255
+	;TEST_BREAK_POINTS = 1	; Test program on heap for debugging stepper
+	;TEST_BRANCHES = 1	; Test program on heap for debugging assembler
+}
+
+;==============================================================================
+!zone BASIC_START_PROGRAM
+;==============================================================================
+*= $0801			; Load point $0801 (BASIC START)
+_FSTART				; This binary must begin with the bytes
+				; representing the BASIC program: 0 SYS2061
+BASIC_program
+	!byte $0b,$08		; $0801 Pointer to next line
+	!byte $00,$00		; $0803 Line number (0)
+	!byte $9e		; $0805 SYS
+!byte 48+(entry_point/1000)%10	; Decimal address of program entry point
+!byte 48+(entry_point/100)%10
+!byte 48+(entry_point/10)%10
+!byte 48+(entry_point/1)%10
+	!byte $00		; $080a End of BASIC line
+	!byte $00,$00		; $080b End of BASIC program
+entry_point	;JMP boot	; $080d First byte after the BASIC program
+
+
+;==============================================================================
+!zone BOOT
+;==============================================================================
+boot		JSR init
+		JSR main
+		JMP exit
+		;RTS			; Return to BASIC
+
+
+!ifdef FUNCTION_KEYS {
+;==============================================================================
+!zone S_KEY_FUNCTIONS
+;==============================================================================
+
+	USER_KEY_LENGTH = 16		; Possible values: 8, 16, or 32
+	.L = USER_KEY_LENGTH
+
+s_key_functions
+;------------------------------------------------------------------------------
+	!fill 8*.L, $00
+
+	*=s_key_functions+.L*0, overlay
+	!pet "preset f1"
+	*=s_key_functions+.L*1, overlay
+	!pet "preset f2"
+	*=s_key_functions+.L*2, overlay
+	!pet "preset f3"
+	*=s_key_functions+.L*3, overlay
+	!pet "preset f4"
+	*=s_key_functions+.L*4, overlay
+	!pet "preset f5"
+	*=s_key_functions+.L*5, overlay
+	!pet "preset f6"
+	*=s_key_functions+.L*6, overlay
+	!pet "preset f7"
+	*=s_key_functions+.L*7, overlay
+	!pet "preset f8"
+	*=s_key_functions+.L*8
+}
+
+;==============================================================================
+!zone MODULES
+;==============================================================================
+_F00 !source "variables.a"	; Global variables
+_F01 !source "opcode_matrix.a"	; Uses  !align , potentially wasting memory
+_F02 !source "toolbox_conf.a"	; Should be included before everything else
+_F03 !source "main_menu.a"	; Main control, cursor keys, writing text
+_F04 !source "mmfn_scroll.a"	; Fill empty lines, when scrolling through dump
+_F05 !source "mmfn_fnkey.a"	; 'K' User defined commands assigned to F-keys
+_F06 !source "eval_line.a"	; Interprets line, when Return was pressed
+_F07 !source "elfn_assemble.a"	; 'A', '.' Convert text to machine code
+_F08 !source "elfn_bindump.a"	; 'B', '%' Edit sprites
+_F09 !source "elfn_direct.a"	; '>' Execute a single instruction immediately
+_F0a !source "elfn_disassemble.a" ; 'D' Convert machine code to text
+_F0b !source "elfn_fill.a"	; 'F' Fill area with pattern
+_F0c !source "elfn_go.a"	; 'G' Call client program
+_F0d !source "elfn_help.a"	; '?' Show help
+_F0e !source "elfn_hex_dec.a"	; '#', '$' Convert numbers
+_F0f !source "elfn_hexdump.a"	; 'M' Show memory
+_F10 !source "elfn_hexinput.a"	; ':' Update memory
+_F11 !source "elfn_illegals.a"	; 'I' Toggle illegal opcodes
+_F12 !source "elfn_load_save.a"	; 'L', 'S' Load/save memory from/to disk
+_F13 !source "elfn_registers.a"	; 'R' Show client's register status
+_F14 !source "elfn_symbols.a"	; '*' Manage symbols
+_F15 !source "elfn_transfer.a"	; 'T', 'U' Copy memory, relocate code
+_F16 !source "system_state.a"	; Restore hardware/memory for a context
+_F17 !ifdef SELF_TEST { !source "self_test.a" }
+_F18 !ifdef DEBUG     { !source "debug.a" }
+_F19
+
+;==============================================================================
+!zone INIT
+;==============================================================================
+
+init
+;------------------------------------------------------------------------------
+		JSR save_zeropage	; Make returning to BASIC possible
+!ifdef DEBUG {
+		JSR debug_break
+}
+!ifdef USE_CONTEXT {
+		JSR init_client_snapshot
+}
+!ifdef WORK_SCREEN {
+		LDA #color_background
+		PHA
+		LDA #color_frame
+		PHA
+		LDA #color_frame_ext
+		PHA
+		LDA #color_text
+		PHA
+		LDA #color_cursor
+		PHA
+		LDA #color_menu
+		PHA
+		LDA #color_menu_active
+		PHA
+		LDA #color_menu_disabled
+		PHA
+		LDA #color_bracket
+		PHA
+		LDA #color_select
+		PHA
+		LDA #color_highlight
+		PHA
+		LDA #color_error
+		PHA
+		JSR load_colors
+} else {
+	!ifndef MIN_CODE_SIZE {
+		JSR load_system_colors
+	}
+}
+
+!ifdef WORK_SCREEN {
+	!ifndef MIN_CODE_SIZE {
+		;;LDA #pcolor_text
+		;;JSR $ffd2		; BSOUT
+		JSR $e544		; CLEAR SCREEN
+	}
+}
+
+!ifdef TOOLBOX_RASTER_IRQ {
+		JSR init_raster_isr
+}
+		JSR init_interrupt_handlers
+
+		LDA #$ff
+		STA first_run
+
+!ifdef INIT_ROM_MASK {
+		LDA $02
+		AND #%11111000
+		ORA #INIT_ROM_MASK	; Disable BASIC ROM
+		STA $01
+}
+!ifdef SYMBOLS {
+		JSR init_symbols
+}
+;------------------------------------------------------------------------------
+		RTS
+
+
+;==============================================================================
+!zone MAIN
+;==============================================================================
+
+;main
+;------------------------------------------------------------------------------
+;		JSR menu_main
+;		RTS
+
+
+
+;==============================================================================
+!zone EXIT
+;==============================================================================
+
+exit
+;------------------------------------------------------------------------------
+		JSR exit_interrupt_handlers
+!ifdef TOOLBOX_RASTER_IRQ {
+		JSR exit_raster_isr
+}
+!ifdef INIT_ROM_MASK {
+		LDA #$01		; Enable BASIC & KERNAL ROM
+		EOR #%00000111
+		STA $01
+}
+!ifndef MIN_CODE_SIZE {
+		LDA #petscii_upper_case
+		JSR $ffd2		; BSOUT
+		LDA #petscii_toggle_case_on
+		JSR $ffd2		; BSOUT
+
+		LDA #cram_lblue
+		STA $0286		; Text color
+		JSR $e544		; CLEAR HOME
+
+		LDA #$0e		; Border and background colors
+		STA $d020		; Blueish
+		LDA #$06
+		STA $d021
+
+		LDA # 0
+		PHA
+		LDA # 0
+		PHA
+		LDA # 39
+		PHA
+		LDA # 24
+		PHA
+		JSR set_scroll_area
+
+	!ifdef WORK_SCREEN {
+		LDA #<s_exit_message
+		PHA
+		LDA #>s_exit_message
+		PHA
+		JSR puts
+	}
+}
+;------------------------------------------------------------------------------
+.loop		LDA $cb			; Currently pressed key
+		CMP #$40		; $40 = no key pressed
+		BNE .loop		; Wait until key released
+		LDA #$00
+		STA $c6			; Nr. keys in input buffer
+
+!ifndef WORK_SCREEN {
+		LDX zp_crsr_col
+		LDY zp_crsr_row
+}
+		JSR restore_zeropage	; Clean up the mess, we created
+
+!ifdef WORK_SCREEN {
+		LDX # 0			; Position cursor below exit message
+		LDY # 5
+}
+		JSR goto_xy
+		RTS
+
+
+;==============================================================================
+!zone SAVE_ZEROPAGE
+;==============================================================================
+
+save_zeropage
+;------------------------------------------------------------------------------
+		LDY #$00
+.save_loop	LDA $00,Y
+		STA zp_backup,Y
+		INY
+		BNE .save_loop
+		RTS
+
+
+restore_zeropage
+;------------------------------------------------------------------------------
+		TYA
+		PHA
+
+		LDY #$00
+.restore_loop	LDA zp_backup,Y
+		STA $00,Y
+		INY
+		BNE .restore_loop
+
+		PLA
+		TAY
+		RTS
+
+
+;==============================================================================
+!zone MAIN_STRINGS
+;==============================================================================
+_Fstr
+
+!ifdef LOWER_CASE_UI {
+s_init_message	!pet "Debug/Monitor "
+} else {
+s_init_message	!pet "debug/monitor "
+}
+s_version	+S_PROGRAM_VERSION 0
+s_version_end	!pet 0
+
+s_init_gap	!pet ", g=", 0
+
+s_init_free	!pet 13, "mem avail: ", 0
+s_init_ws	!pet 13, "workspace: ", 0
+s_snapshot_size	!pet 13, "snapshots: ", 0
+
+!ifdef WORK_SCREEN {
+s_exit_message	!pet petscii_home, petscii_lblue, petscii_rvs_off, 13
+		!pet "                 demon", 13
+		!pet "        -----------------------", 13
+		!pet "         http://harald.ist.org", 13
+		!pet "            copy(l)eft 2019"
+		!pet 0
+}
+
+!ifndef TOOLBOX_PRINT_MENU {
+s_space_40	!pet "                                        ", 0
+}
+
+;==============================================================================
+!zone PRE_HEAP
+;==============================================================================
+_Fdyn
+
+current_screen	!byte 0
+dynamic_vars
+	zp_backup	= dynamic_vars
+!ifdef SYMBOLS {
+	symbol_table	= zp_backup	+ $100
+	heap		= symbol_table	+ NR_SYMBOLS * SYMBOL_REC_LEN
+} else {
+	heap		= zp_backup	+ $100
+}
+
+
+;==============================================================================
+!zone HEAP
+;==============================================================================
+
+*=heap
+
+!ifdef HEAP_SINGLE_BRK {
+;------------------------------------------------------------------------------
+		BRK		; Show this in status message at program start
+;------------------------------------------------------------------------------
+}
+
+!src "test_programs.a"
+
+_FEND
+;==============================================================================
+!eof

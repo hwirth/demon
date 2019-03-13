@@ -1,0 +1,641 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+;-----------------------------------------------------------------------------
+; Variables
+;-----------------------------------------------------------------------------
+puts_rvs_flag	!byte 0
+puts_scroll_mode !byte 0		; 0=Scroll at EOL, 1=at BOL
+puts_scrolled	!byte 0			; Indicates if scrolling occurred
+puts_color	!byte 0
+
+; Pointers for indirect addressing
+;------------------------------------------------------------------------------
+	temp_sptr	= $f7
+	puts_vptr	= $08	;;$3f
+	puts_cptr	= $14	;;$41
+
+
+;-----------------------------------------------------------------------------
+; Constants
+;-----------------------------------------------------------------------------
+	scroll_mode_immediate	= $00	; See puts.a
+	scroll_mode_deferred	= $01
+	scroll_mode_none	= $02	; Careful: This may write beyond VRAM!
+
+
+!ifdef TB_PUTS_SAVE_ZP {
+;=============================================================================
+!zone PUTS_SAVE_ZP
+;=============================================================================
+.temp		!byte 0,0,0,0, 0,0,0,0
+
+puts_save_zp	LDY #$08		; Back up $f7-$fe
+.loop1		LDA $f6,Y
+		STA .temp-1,Y
+		DEY
+		BNE .loop1
+		RTS
+;-----------------------------------------------------------------------------
+puts_restore_zp	LDY #$08		; Restore $f7-$fe
+.loop2		LDA .temp-1,Y
+		STA $f6,Y
+		DEY
+		BNE .loop2
+		RTS
+
+} ; TB_PUTS_SAVE_ZP
+
+
+!ifdef TB_PUTS_SAVE_STATE {
+;=============================================================================
+!zone PUTS_SAVE_STATE
+;=============================================================================
+
+		; ADD puts_scroll_mode
+
+puts_save_state
+;-----------------------------------------------------------------------------
+		PLA
+		TAX
+		PLA
+		TAY
+
+		LDA puts_color
+		PHA
+		LDA puts_rvs_flag
+		PHA
+		LDA zp_crsr_col
+		PHA
+		LDA zp_crsr_row
+		PHA
+
+		TYA
+		PHA
+		TXA
+		PHA
+		RTS
+
+
+puts_restore_state
+;-----------------------------------------------------------------------------
+		PLA
+		TAX
+		PLA
+		TAY
+
+		PLA
+		STA zp_crsr_row
+		PLA
+		STA zp_crsr_col
+		PLA
+		STA puts_rvs_flag
+		PLA
+		STA puts_color
+
+		TYA
+		PHA
+		TXA
+		PHA
+
+		;JSR update_vptr
+		;JSR update_cptr
+
+		LDX zp_crsr_col
+		LDY zp_crsr_row
+		JMP goto_xy
+		;RTS
+
+} ; TB_PUTS_SAVE_STATE
+
+
+!ifdef TB_GET_UPDATE_VPTR {
+;=============================================================================
+!zone VPTR
+;=============================================================================
+
+update_vptr	LDA zp_crsr_col		; VRAM TOP + Cursor x-pos
+		STA puts_vptr
+		LDA # 4
+		STA puts_vptr+1
+
+		LDY zp_crsr_row		; Current row (0..24)
+.next_row	CPY # 0
+		BEQ .exit
+		CLC
+		LDA puts_vptr
+		ADC # 40		; Add 40 for each row
+		STA puts_vptr
+		LDA puts_vptr+1
+		ADC # 0
+		STA puts_vptr+1
+		DEY
+		BNE .next_row
+
+.exit		RTS
+
+;------------------------------------------------------------------------------
+update_cptr	CLC
+		LDA puts_vptr
+		ADC #<(CRAM-VRAM)
+		STA puts_cptr
+		LDA puts_vptr+1
+		ADC #>(CRAM-VRAM)
+		STA puts_cptr+1
+		RTS
+
+;------------------------------------------------------------------------------
+add_to_vptr	CLC
+		TXA
+		ADC puts_vptr
+		STA puts_vptr
+		LDA puts_vptr+1
+		ADC # 0
+		STA puts_vptr+1
+!if (0) {
+		CMP #$07		; VRAM BOTTOM
+		BCC .add_done		; BCC: .A < MEM
+		LDA puts_vptr
+		CMP #$e8
+		BCC .add_done
+
+		SEC
+		SBC #< 1000
+		STA puts_vptr
+		LDA puts_vptr+1
+		SBC #> 1000
+		STA puts_vptr+1
+}
+.add_done	JMP update_cptr
+		;RTS
+
+;------------------------------------------------------------------------------
+sub_from_vptr	STX $02
+		SEC
+		LDA puts_vptr
+		SBC $02
+		STA puts_vptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA puts_vptr+1
+!if (0) {
+		CMP #$04		; VRAM BOTTOM
+		BCS .sub_done
+		LDA puts_vptr
+
+		CLC
+		ADC #< 1000
+		STA puts_vptr
+		LDA puts_vptr+1
+		ADC #> 1000
+		STA puts_vptr+1
+}
+.sub_done	JMP update_cptr
+		;RTS
+
+} ; TB_GET_UPDATE_VPTR
+
+
+!ifdef TB_GOTO_XY {
+;=============================================================================
+!zone GOTO_XY
+;=============================================================================
+goto_xy		STX zp_crsr_col
+		STY zp_crsr_row
+
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		JSR $e56c		; Update cursor pos for BSOUT
+					;; Does this even work?
+		JSR update_vptr
+		JSR update_cptr
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+} ; TB_GOTO_XY
+
+
+!ifdef TB_GET_COLOR_CODE {
+;=============================================================================
+!zone GET_COLOR_CODE
+;=============================================================================
+get_color_code	CLC			; Signals no color found
+		STY $02
+		LDY #$00
+
+.color_loop	CMP color_code_tab,Y
+		BEQ .color_found
+		INY
+		INY
+		CPY #$20
+		BEQ .color_done
+		BNE .color_loop
+.color_found	INY
+		LDA color_code_tab,Y
+		STA puts_color
+		STA $0286		; BSOUT color
+		LDY $02
+		SEC			; Signals found color
+		RTS
+
+.color_done	CLC
+		LDY $02
+		RTS
+
+} ; TB_GET_COLOR_CODE
+
+
+!ifdef TB_COLOR_CODE_TAB {
+color_code_tab
+	; Colors --> CRAM code
+	!byte petscii_black,0,	petscii_white,1,	petscii_red,2
+	!byte petscii_cyan,3,	petscii_purple,4,	petscii_green,5
+	!byte petscii_blue,6,	petscii_yellow,7,	petscii_orange,8
+	!byte petscii_brown,9,	petscii_lred,10,	petscii_dgrey,11
+	!byte petscii_grey,12,	petscii_lgreen,13,	petscii_lblue,14
+	!byte petscii_lgrey,15
+
+	; Misc control codes
+	!byte	petscii_newline, petscii_uc_newline
+	!byte	petscii_home,	petscii_clr_home
+	!byte	petscii_ins,	petscii_del,	petscii_down,	petscii_right
+	!byte	petscii_up,	petscii_left,	petscii_rvs_on,	petscii_rvs_off
+
+} ; TB_COLOR_CODE_TAB
+
+
+!ifdef TB_CHECK_PRINTABLE_CHAR {
+;------------------------------------------------------------------------------
+!zone CHECK_PRINTABLE_CHAR
+;------------------------------------------------------------------------------
+; OUT:	CARRY	Clear, if printable
+
+check_printable_char
+		STY $02
+		LDY #$00
+
+.loop1		CMP color_code_tab,Y
+		BEQ .found
+		INY
+		INY
+		CPY #$20
+		BEQ .loop2
+		BNE .loop1
+
+.loop2		CMP color_code_tab,Y
+		BEQ .found
+		INY
+		CPY #$2c
+		BNE .loop2
+.printable	LDY $02
+		CLC
+		RTS
+
+.found		LDY $02
+		SEC
+		RTS
+
+} ; TB_CHECK_PRINTABLE_CHAR
+
+
+!ifdef TB_PUTS {
+;=============================================================================
+!zone PUTS
+; IN:	STACK	Pointer to string	PHA lo, PHA hi, JSR
+;=============================================================================
+
+puts
+!ifdef TB_PUTS_SAVE_ZP {
+		JSR puts_save_zp
+}
+		PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		PLA			; Get pointer to string
+		STA temp_sptr+1
+		PLA
+		STA temp_sptr
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+
+		JSR update_vptr
+		JSR update_cptr
+;------------------------------------------------------------------------------
+		LDY #$00
+		STY puts_scrolled	; Reset scrolling indicator
+.get_char	LDA (temp_sptr),Y
+		BEQ .print_done
+
+		LDX puts_scroll_mode
+		BEQ .skip_check_before
+		JSR .check_scroll
+.skip_check_before
+
+		JMP .control_chars	; Uses JMP .print_char to return
+
+.print_char	JSR petscii_to_screen
+		LDX puts_rvs_flag
+		BEQ .skip_rvs
+		ORA #$80
+.skip_rvs	STY $02
+		LDY #$00
+		STA (puts_vptr),Y	; Char to VRAM
+		LDA puts_color
+		STA (puts_cptr),Y	; Color to CRAM
+		LDX #$01
+		JSR add_to_vptr
+		LDY $02
+		LDX puts_scroll_mode
+		BNE .skip_check_after
+		JSR .check_scroll
+.skip_check_after
+
+.next_char	LDA $028d		; Delay when control pressed
+		CMP #04
+		BNE .skip_delay
+		LDX # 10
+		JSR sleep
+.skip_delay
+		INY
+		BNE .get_char
+;------------------------------------------------------------------------------
+.print_done	LDA #$00
+		STA zp_crsr_col
+		STA zp_crsr_row
+.update_loop	LDA puts_vptr+1
+		CMP #$05
+		BCS .gteq
+		LDA puts_vptr
+		CMP #$28
+		;BCS .gteq
+		BCC .lt
+
+.gteq		INC zp_crsr_row
+		SEC
+		LDA puts_vptr
+		SBC #$28
+		STA puts_vptr
+		LDA puts_vptr+1
+		SBC #$00
+		STA puts_vptr+1
+		JMP .update_loop
+
+.lt		STA zp_crsr_col
+!ifdef TB_PUTS_SAVE_ZP {
+		JSR puts_restore_zp
+}
+		JSR update_vptr
+		JSR update_cptr
+
+		JSR $e56c		; Update cursor position for BSOUT
+		RTS
+
+
+; Handle control chars
+;------------------------------------------------------------------------------
+.control_chars
+.color		JSR get_color_code
+		BCS .next_char
+
+.ins		CMP #petscii_ins
+		BNE .del
+		JMP .next_char
+
+.del		CMP #petscii_del
+		BNE .clrhome
+		TYA
+		PHA
+		LDX #$01
+		JSR sub_from_vptr
+		JSR .scroll_after
+		LDA #$20
+		LDY #$00
+		STA (puts_vptr),Y
+		PLA
+		TAY
+		JMP .next_char
+
+.clrhome	CMP #petscii_clr_home
+		BNE .home
+		TYA
+		PHA
+		JSR menu_clr_home
+		PLA
+		TAY
+		JMP .next_char
+
+.home		CMP #petscii_home
+		BNE .rvson
+		JSR menu_home
+		JSR .scroll_after
+		JMP .next_char
+
+.rvson		CMP #petscii_rvs_on
+		BNE .rvsoff
+		LDX #$01		; Remember state
+		STX puts_rvs_flag
+		JMP .next_char
+
+.rvsoff		CMP #petscii_rvs_off
+		BNE .right
+		LDX #$00		; Remember state
+		STX puts_rvs_flag
+		JMP .next_char
+
+.right		CMP #petscii_right
+		BNE .up
+		LDX # 1
+		JSR add_to_vptr
+		JSR .scroll_after
+		JMP .next_char
+
+.up		CMP #petscii_up
+		BNE .down
+		LDX # 40
+		JSR sub_from_vptr
+		JSR .scroll_after
+		JMP .next_char
+
+.down		CMP #petscii_down
+		BNE .left
+		LDX # 40
+		JSR add_to_vptr
+		JSR .scroll_after
+		JMP .next_char
+
+.left		CMP #petscii_left
+		BNE .cr
+		LDX # 1
+		JSR sub_from_vptr
+		JSR .scroll_after
+		JMP .next_char
+
+.cr		CMP #petscii_newline
+		BEQ .do_cr
+		CMP #petscii_uc_newline
+		BNE .special_done
+.do_cr		JSR .new_line
+		JMP .next_char
+
+.special_done	JMP .print_char
+
+
+; New line
+;------------------------------------------------------------------------------
+nl_temp		!byte 0,0
+
+.new_line	LDA puts_vptr		; Subtract 40 until puts_vptr points
+		STA nl_temp		; into the first line of VRAM
+		LDA puts_vptr+1
+		STA nl_temp+1
+
+		LDA nl_temp+1
+.nl_loop	CMP #$05		; Hi byte > $04?
+		BCS .nl_sub40
+		LDA nl_temp		; Hi byte = $04, check for top row
+		CMP #$28
+		BCS .nl_sub40		; Lo byte > 39, subtract one more row
+
+		TAX			; Remaining value is crsr x-pos
+		JSR sub_from_vptr	; Subtract from puts_vptr, moving to
+		LDX #$28		; left of screen
+		JSR add_to_vptr		; Move one line down
+
+		JSR .scroll_after
+		RTS
+
+.nl_sub40	SEC
+		LDA nl_temp
+		SBC #$28
+		STA nl_temp
+		LDA nl_temp+1
+		SBC #$00
+		STA nl_temp+1
+		JMP .nl_loop
+
+
+; Clear/Home
+;------------------------------------------------------------------------------
+menu_clr_home	PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDA scroll_top
+		BNE .clear_partial
+		LDA scroll_bottom
+		CMP # 24
+		BNE .clear_partial
+
+.clear_full	JSR $e544		; Clearscr
+		JMP .clear_done
+
+.clear_partial	LDA scroll_tptr
+		STA puts_vptr
+		LDA scroll_tptr+1
+		STA puts_vptr+1
+
+		SEC
+		LDA scroll_bottom
+		SBC scroll_top
+		TAX
+
+.clear_row	LDA #' '
+		LDY # 39
+.clear_col	STA (puts_vptr),Y
+		DEY
+		BPL .clear_col
+
+		CLC
+		LDA puts_vptr
+		ADC # 40
+		STA puts_vptr
+		LDA puts_vptr+1
+		ADC # 0
+		STA puts_vptr+1
+
+		DEX
+		BPL .clear_row
+
+
+.clear_done	LDX # 0
+		LDY scroll_top
+		JSR goto_xy
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+
+; Check if scroll is needed
+;------------------------------------------------------------------------------
+.scroll_after	LDA puts_scroll_mode
+		BEQ .check_scroll
+		RTS
+
+.check_scroll	PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDA puts_scroll_mode
+		CMP #scroll_mode_none
+		BEQ .scroll_done
+
+.check_top	LDA puts_vptr+1
+		CMP scroll_tptr+1	;
+		BCC .scroll_down
+		BNE .check_bottom	; Top hi > cursor hi: nothing to do.
+.check_top_lo	LDA puts_vptr		; Yes: cursor hi = top hi
+		CMP scroll_tptr		; Cursor lo >= top lo?
+		BCS .check_bottom	; Yes: nothing to do
+.scroll_down	JSR scroll_down
+		DEC puts_scrolled
+		LDX # 40
+		JSR add_to_vptr
+		JMP .scroll_done
+
+.check_bottom	LDA puts_vptr+1
+		CMP scroll_bptr+1	; Cursor hi < bottom hi?
+		BCC .scroll_done	; Yes: nothing to do
+		LDA puts_vptr		; No: Cursor hi = bottom hi.
+		CMP scroll_bptr		; Cursor lo < bottom lo?
+		BCC .scroll_done	; Yes: nothing to do
+.scroll_up	JSR scroll_up
+		INC puts_scrolled
+		LDX # 40
+		JSR sub_from_vptr
+
+.scroll_done	PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+} ; TB_PUTS
+
+
+;=============================================================================
+;EOF

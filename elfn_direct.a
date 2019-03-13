@@ -1,0 +1,157 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ELFN_DIRECT
+;==============================================================================
+
+	.strbuf = TAPE_BUFFER
+	.direct_buf = heap
+
+;------------------------------------------------------------------------------
+.error		SEC
+		SBC # 4
+		TAY
+		JMP line_show_error
+
+.exit		CLC			; Trigger newline
+		RTS
+
+elfn_direct
+;==============================================================================
+		LDY # 1
+		JSR line_expect_empty
+		BCC .exit		; Leave direct mode if nothing entered
+;------------------------------------------------------------------------------
+		; Prepare string for calling assemble
+
+		LDA #>.direct_buf	; Store exec buffer address
+		JSR byte_to_hex
+		STA .strbuf
+		STX .strbuf+1
+
+		LDA #<.direct_buf
+		JSR byte_to_hex
+		STA .strbuf+2
+		STX .strbuf+3
+
+		LDA #' '
+		STA .strbuf+4
+;------------------------------------------------------------------------------
+		; Copy command from screen and store as PETSCII in string
+
+		JSR goto_pos0
+
+		LDY # 38		; Convert line to string
+.loop_convert	LDA (puts_vptr),Y
+		JSR screen_to_petscii
+		JSR to_lower_case
+		STA .strbuf+4,Y
+		DEY
+		BNE .loop_convert	; Omitting the first char
+
+		LDA # 0			; Fill rest of line with EOS
+		LDY # 39
+.loop_null	LDX .strbuf-1,Y
+		CPX #' '
+		BNE .done_null
+		STA .strbuf-1,Y
+		DEY
+		BNE .loop_null
+.done_null
+;------------------------------------------------------------------------------
+		; Convert string to instruction
+
+		LDX #<.strbuf
+		LDA #>.strbuf
+
+		JSR assemble
+		BCS .error
+;------------------------------------------------------------------------------
+		; Back up PC and exec buffer
+
+		LDA client_pc
+		PHA
+		LDA client_pc+1
+		PHA
+
+		LDY # 5
+.loop_backup	LDA .direct_buf,Y
+		PHA
+		DEY
+		BPL .loop_backup
+;------------------------------------------------------------------------------
+		; Store assembly result in exec buffer
+
+		LDA asm_opcode		; Copy assembled instruction
+		STA .direct_buf+0
+
+		LDA asm_operand_lo
+		STA .direct_buf+1
+
+		LDA asm_operand_hi	; Up to 3 bytes
+		STA .direct_buf+2
+
+		LDY asm_ilen		; Add a BRK instruction
+		LDA # 0
+		STA .direct_buf,Y
+;------------------------------------------------------------------------------
+		; Call the instruction
+
+		LDA #$ff
+		STA direct_command	; Don't show registers the normal way
+
+		LDA #'g'		; Simulate typed in command
+		LDX #<.direct_buf
+		LDY #>.direct_buf
+		JSR call_elfn_single_param
+		JSR elfn_go		; Have our instruction executed
+;------------------------------------------------------------------------------
+		; Restore PC and exec buffer
+
+		LDA # 0
+.loop_restore	PLA
+		STA .direct_buf,Y
+		INY
+		CPY # 6
+		BNE .loop_restore
+
+		PLA
+		STA client_pc+1
+		PLA
+		STA client_pc
+;------------------------------------------------------------------------------
+		; We supressed showing registers, so we do it here:
+
+!ifdef STEP_REGS_COLOR {
+	!ifdef USE_COLORS {
+		LDA puts_color
+		PHA
+		LDA #cram_grey
+		STA puts_color
+	}
+}
+		JSR show_registers
+
+!ifdef STEP_REGS_COLOR {
+	!ifdef USE_COLORS {
+		PLA
+		STA puts_color
+	}
+}
+		LDA # 0			; Show registers normally when
+		STA direct_command	; returning to the monitor
+
+		JSR puts_newline	; Print new prompt for another direct
+		LDA #'>'		; command
+		JSR putc
+
+		SEC			; Prevent newline
+		RTS
+
+
+;==============================================================================
+!eof

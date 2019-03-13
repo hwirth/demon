@@ -1,0 +1,303 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone ELFN_BINDUMP
+;==============================================================================
+
+	.sptr		= $f7
+	.eptr		= $f9
+	.bit_count	= $fb
+	.show_sprite	= $fc
+	.byte		= $fd
+
+bindump_single_line
+;------------------------------------------------------------------------------
+		STX .sptr
+		STX .eptr
+		STA .sptr+1
+		STA .eptr+1
+		STY .show_sprite
+		JMP start_bindump
+
+
+;------------------------------------------------------------------------------
+.error		JMP line_show_error
+
+elfn_bindump
+;==============================================================================
+		JSR .show_bindump
+
+		LDA .show_sprite
+		BEQ .normal_exit
+		LDX # 6
+		LDY scroll_top
+		JSR goto_xy
+		SEC
+		RTS
+
+.normal_exit	CLC			; Trigger newline
+		RTS
+
+
+.show_bindump
+;------------------------------------------------------------------------------
+		LDA #$00
+		STA .show_sprite
+
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr
+		STA .sptr+1
+
+		JSR line_expect_empty
+		BCC .single_param
+
+		JSR line_expect_int16
+		BCS .error
+		STX .eptr
+		STA .eptr+1
+		JMP .skip_single
+
+.single_param	CLC
+		LDA .sptr
+		AND # $c0
+		STA .sptr
+		ADC # 62
+		STA .eptr
+		LDA .sptr+1
+		ADC # 0
+		STA .eptr+1
+
+		JSR menu_clr_home
+
+		LDA #$ff
+		STA .show_sprite
+		JMP .skip_newline
+.skip_single
+;------------------------------------------------------------------------------
+
+.next_row	JSR check_run_stop
+		BCS .normal_exit
+
+		JSR puts_newline
+
+start_bindump
+.skip_newline	LDA #'%'
+		JSR putc
+
+		LDA .sptr+1
+		JSR puts_hexbyte
+		LDA .sptr
+		JSR puts_hexbyte
+
+		LDY # 0
+		JSR .print_binbyte	; Print first byte as flags
+
+		LDA .show_sprite
+		BNE .continue_sprite	; Print two more bytes as flags
+		LDA #' '
+		JSR putc
+		LDA #':'
+		JSR putc
+		LDY # 0
+		LDA (.sptr),Y
+		JSR puts_hexbyte
+
+		INC .sptr
+		BNE .check_end
+		INC .sptr+1
+
+.check_end
+		LDA .sptr+1
+		CMP .eptr+1
+		BCC .next_row
+		BEQ .check_lo
+		BCS .done
+.check_lo	LDA .sptr
+		CMP .eptr
+		BCC .next_row
+		BEQ .next_row
+
+.done		RTS
+
+
+.continue_sprite
+;------------------------------------------------------------------------------
+		JSR .print_binbyte
+		JSR .print_binbyte
+
+		LDA #' '
+		JSR putc
+		LDA #':'
+		JSR putc
+
+		LDA puts_scroll_mode
+		PHA
+
+		LDA scroll_mode_deferred
+		STA puts_scroll_mode
+
+		LDY # 0
+		LDA (.sptr),Y
+		JSR puts_hexbyte
+		INY
+		LDA (.sptr),Y
+		JSR puts_hexbyte
+		INY
+		LDA (.sptr),Y
+		JSR puts_hexbyte
+
+		LDX # 0
+		LDY zp_crsr_row
+		DEY
+		JSR goto_xy
+
+		PLA
+		STA puts_scroll_mode
+
+		CLC
+		LDA .sptr
+		ADC # 3
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+
+		JMP .check_end
+
+;------------------------------------------------------------------------------
+.print_binbyte	LDA #' '
+		JSR putc
+
+!ifdef USE_COLORS {
+		LDA puts_color
+		PHA
+		LDA .show_sprite
+		BEQ .skip_color
+		LDA #cram_grey
+		STA puts_color
+.skip_color
+}
+		LDA # 8
+		STA .bit_count
+		LDA (.sptr),Y
+		STA .byte
+.next_bit	ASL .byte
+		BCS .bit_set
+.bit_clear	LDA #'.'
+		BNE .show_bit
+.bit_set	LDA #'*'
+.show_bit	JSR putc
+		DEC .bit_count
+		BNE .next_bit
+		INY
+
+!ifdef USE_COLORS {
+		PLA
+		STA puts_color
+}
+		RTS
+
+
+;==============================================================================
+!zone ELFN_BININPUT
+;==============================================================================
+
+	.tptr		= $f7		;
+	.eptr		= $f9		; Shared with ELFN_BINDUMP
+	.show_sprite	= $fc		;
+
+	.temp		= $fd		; $fd..$fe: Buffer for result
+	.strbuf		= TAPE_BUFFER
+
+;------------------------------------------------------------------------------
+.error		JMP line_show_error
+
+.check_empty	JSR line_expect_empty
+		BCS .error
+.done		CLC			; Trigger newline
+		RTS
+
+elfn_bininput
+;==============================================================================
+		LDA #$00
+		STA .show_sprite
+
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error		; End input multiple bytes
+		STX .tptr
+		STX .eptr
+		STA .tptr+1		; Save target address
+		STA .eptr+1		; Prepare calling elfn_bindump
+
+		JSR line_expect_flags
+		BCS .check_empty
+		STA .temp+1		; Save byte 1 to buffer
+
+		LDA .strbuf,Y
+		CMP #' '		; Not a sprite line?
+		BEQ .save_one
+		CMP #':'
+		BEQ .save_one
+
+		JSR line_expect_flags
+		BCS .error
+		STA .temp+2		; Save byte 2 to buffer
+
+		JSR line_expect_flags	; Get byte 3
+		BCS .error
+
+		LDY # 2
+		STA (.tptr),Y		; Save byte 3 to memory
+		DEY
+		LDA .temp+2
+		STA (.tptr),Y		; Save byte 2 to memory
+
+		LDA #$ff
+		STA .show_sprite
+
+.save_one	LDY # 0
+		LDA .temp+1
+		STA (.tptr),Y		; Save byte 1 to memory
+;------------------------------------------------------------------------------
+		LDA .show_sprite
+		BEQ .update_line
+.is_sprite	CLC
+		LDA .eptr
+		ADC # 2
+		STA .eptr
+		LDA .eptr+1
+		ADC # 0
+		STA .eptr+1
+
+.update_line	JSR goto_pos0
+		JSR start_bindump
+		JSR puts_newline
+
+		INC .eptr
+		BNE .skip_e_hi
+		INC .eptr+1
+.skip_e_hi
+		LDA #'%'
+		JSR putc
+
+		LDA .eptr+1
+		JSR puts_hexbyte
+		LDA .eptr
+		JSR puts_hexbyte
+
+		LDA #' '
+		JSR putc
+
+		SEC			; Prevent newline
+		RTS
+
+
+;==============================================================================
+!eof

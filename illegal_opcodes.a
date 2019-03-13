@@ -1,0 +1,56 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone elfn_illegals
+;==============================================================================
+
+elfn_illegals
+;------------------------------------------------------------------------------
+		JSR goto_pos0
+
+		LDY # 1
+		LDA (puts_vptr),Y
+
+		CMP #'+'
+		BEQ .enable
+		CMP #'-'
+		BNE .show_status
+.disable	LDA #$00
+		BEQ .store
+.enable		LDA #$ff
+.store		STA illegal_opcs
+
+.show_status	LDA #<s_illegal_ops
+		PHA
+		LDA #>s_illegal_ops
+		PHA
+		JSR puts
+
+		LDA illegal_opcs
+		BEQ .off
+		LDA #<s_enabled
+		PHA
+		LDA #>s_enabled
+		PHA
+		JMP .print
+
+.off		LDA #<s_disabled
+		PHA
+		LDA #>s_disabled
+		PHA
+.print		JSR puts
+
+		CLC
+		RTS
+
+
+s_illegal_ops	!pet "illegal ops: ", 0
+s_enabled	!pet "on", 0
+s_disabled	!pet "off", 0
+
+;==============================================================================
+!eof

@@ -1,0 +1,261 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+;-----------------------------------------------------------------------------
+; Variables
+;-----------------------------------------------------------------------------
+
+; hex_dump
+;-----------------------------------------------------------------------------
+hexdump_raddr	!byte 0,0
+hexdump_ddrmask	!byte 0
+hexdump_offset	!byte 0,0
+
+; hexdump_show_line
+;-----------------------------------------------------------------------------
+dumpc_ram	!byte cram_white
+dumpc_ubasic	!byte cram_blue
+dumpc_devices	!byte cram_lgreen
+dumpc_ukernal	!byte cram_red
+dumpc_charrom	!byte cram_dgrey
+dumpc_basic	!byte cram_dgrey
+dumpc_kernal	!byte cram_dgrey
+
+
+;==============================================================================
+!zone HEX_DUMP
+;==============================================================================
+	start_ptr = $47;$f9
+	end_ptr   = $49;$fb
+
+!ifdef TOOLBOX {
+sys_hex_dump
+		PLA
+		STA hexdump_raddr+1
+		PLA
+		STA hexdump_raddr
+		JSR get_word		; Start address to stack
+		JSR get_word		; End address to stack
+		JSR get_word		; Offset to stack
+		JSR get_int		; DDR mask to stack
+		TXA
+		PHA
+		JMP start_hex_dump
+}
+jsr_hex_dump	PLA
+		STA hexdump_raddr+1
+		PLA
+		STA hexdump_raddr
+start_hex_dump
+		PLA
+		AND #$07
+		STA hexdump_ddrmask
+		PLA
+		STA hexdump_offset
+		PLA
+		STA hexdump_offset+1
+		PLA
+		STA end_ptr
+		PLA
+		STA end_ptr+1
+		PLA
+		STA start_ptr
+		PLA
+		STA start_ptr+1
+
+		;;LDA puts_color
+		;;STA dump_ram_color
+
+.next_row	JSR hexdump_show_line
+
+		LDA end_ptr+1		; start_ptr > end_ptr?
+		CMP start_ptr+1
+		BCC .done
+		BNE .next_row
+		LDA end_ptr
+		CMP start_ptr
+		BCS .next_row
+
+.done		LDA hexdump_raddr
+		PHA
+		LDA hexdump_raddr+1
+		PHA
+		RTS			; exit to BASIC
+
+
+;-----------------------------------------------------------------------------
+!zone HEX_DUMP_SHOW_LINE
+;-----------------------------------------------------------------------------
+.buffer		!byte 0,0,0,0, 0,0,0,0
+.colors		!byte 0,0,0,0, 0,0,0,0
+.address	!byte 0,0
+
+hexdump_show_line
+		LDA #' '
+		JSR putc
+
+		SEI
+		LDA $01			; Select RAM/ROM in DDR
+		PHA
+		AND #$f8
+		ORA hexdump_ddrmask
+		STA $01
+
+		LDY #$07		; Copy 8 bytes from target memory
+.buffer_next	LDA (start_ptr),Y	; to buffer
+		STA .buffer,Y
+		DEY
+		BPL .buffer_next
+
+		PLA			; Restore DDR
+		STA $01
+		CLI
+
+		LDA $01			; Check, if
+
+		LDY #$07		; Check ROM color for each byte
+.loop_colors	CLC			; Calculate hi byte of address
+		TYA
+		ADC start_ptr
+		STA .address
+		LDA start_ptr+1
+		ADC #$00
+		STA .address+1
+
+		LDA dumpc_ram		; Default: RAM color
+		STA .colors,Y
+
+.check_basic	LDA .address+1
+		CMP #$a0		; BASIC ROM $a000-$bfff?
+		BCC .check_char
+		CMP #$c0
+		BCS .check_char
+		LDA hexdump_ddrmask	; BASIC ROM mapped in?
+		AND #$01
+		BEQ .ubasic
+.basic		LDA dumpc_basic
+		JMP .save_rom_color
+.ubasic		LDA dumpc_ubasic
+		JMP .save_rom_color
+
+.check_char	LDA .address+1
+		CMP #$d0		; CHAR ROM $d000-$dfff?
+		BCC .check_kernal
+		CMP #$e0
+		BCS .check_kernal
+		LDA hexdump_ddrmask	; CHAR ROM mapped in?
+		AND #$04
+		BNE .devices
+.charrom	LDA dumpc_charrom
+		JMP .save_rom_color
+.devices	LDA dumpc_devices	; VIC, SID, CIA
+		JMP .save_rom_color
+
+.check_kernal	LDA .address+1
+		CMP #$e0		; KERNAL ROM $e000-$ffff?
+		BCC .color_done
+		;CMP #$ff
+		;BCS .color_done
+		LDA hexdump_ddrmask	; KERNAL ROM mapped in?
+		AND #$02
+		BEQ .ukernal
+.kernal		LDA dumpc_kernal
+		JMP .save_rom_color
+.ukernal	LDA dumpc_ukernal
+		;JMP .save_rom_color
+
+.save_rom_color	STA .colors,Y
+.color_done	DEY
+		BPL .loop_colors
+
+
+.address_out	SEC			; Adjust address for offset
+		LDA start_ptr
+		SBC hexdump_offset
+		STA .address
+		LDA start_ptr+1
+		SBC hexdump_offset+1
+		STA .address+1
+
+		LDA .colors
+		STA $0286		; Text color
+
+		LDA .address+1		; Print address of line
+		JSR hi_nibble
+		JSR $ffd2		; BSOUT
+		LDA .address+1
+		JSR lo_nibble
+		JSR $ffd2		; BSOUT
+		LDA .address
+		JSR hi_nibble
+		JSR $ffd2		; BSOUT
+		LDA .address
+		JSR lo_nibble
+		JSR $ffd2		; BSOUT
+		LDA #$20		; Space
+		JSR $ffd2		; BSOUT
+
+		LDY #$00		; Show 8 bytes
+.next_byte	LDA .colors,Y
+		STA $0286		; Text color
+		LDA .buffer,Y
+		JSR hi_nibble
+		JSR $ffd2		; BSOUT
+		LDA .buffer,Y
+		JSR lo_nibble
+		JSR $ffd2		; BSOUT
+		LDA #$20		; Space
+		JSR $ffd2		; BSOUT
+		INY
+		CPY #$08
+		BNE .next_byte
+
+.text_out	LDY #$00		; Show 8 chars
+.next_char	LDA .buffer,Y
+		STY $02
+
+		PHA
+		AND #$7f
+		CMP #$20
+		BCS .real_char
+
+.ctrl_char	LDA #petscii_rvson
+		JSR $ffd2		; BSOUT
+		PLA
+		CLC
+		ADC #$40
+		JSR $ffd2		; BSOUT
+		LDA #$00		; Clear insert mode, which may have
+		STA $d4			; been activated by a quotation mark
+		LDA #petscii_rvsoff
+		JSR $ffd2		; BSOUT
+		JMP .cont
+
+.real_char	PLA
+		JSR $ffd2		; BSOUT
+		LDA #$00
+		STA $d4
+
+.cont		LDY $02
+		INY
+		CPY #$08
+		BNE .next_char
+
+		CLC
+		LDA start_ptr
+		ADC #$08
+		STA start_ptr
+		LDA start_ptr+1
+		ADC #$00
+		STA start_ptr+1
+
+		LDA #petscii_newline
+		JSR putc		; Destroys ZP pointers!?
+
+		RTS
+
+
+;=============================================================================
+;EOF

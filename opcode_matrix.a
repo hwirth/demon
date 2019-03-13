@@ -1,0 +1,456 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tsize=8
+;==============================================================================
+; https://www.c64-wiki.de/wiki/Opcode#Matri_der_Opcodes_der_MOS_6510
+; https://www.c64-wiki.de/wiki/%C3%9Cbersicht_6502-Assemblerbefehle
+; http://visual6502.org/wiki/index.php?title=6502_all_256_Opcodes
+
+
+;==============================================================================
+!zone OPCODE_MATRIX
+;==============================================================================
+.before
+!align $ff, $00		; Each of the four follwing tables will start at $xx00
+.after
+	opcode_gap = .after - .before	; Count unused bytes
+
+
+; Address mode indicators - Must match amode_prefix and amode_postfix!
+;------------------------------------------------------------------------------
+	aIMP = $0		; Ops without parameters
+	aAKK = $1
+	aKIL = $2
+
+	aIMM = $3		; Ops with one-byte parameter
+	aINX = $4
+	aINY = $5
+	aZP  = $6
+	aZPX = $7
+	aZPY = $8
+
+	aREL = $9		; 1 byte in machine code, but 2 in disassembly
+
+	aABS = $a		; Ops with two-byte parameters
+	aABX = $b
+	aABY = $c
+	aIND = $d
+
+
+	bIMP = aIMP | $80	; Alternative table entries to prevent
+	bIMM = aIMM | $80	; assembling to non-default opcode (NOP, ANC)
+
+
+opcode_matrix
+; Offsets to mnemonic strings = m-index*3
+;------------------------------------------------------------------------------
+;	  0     1     2     3     4     5     6     7     8     9     a     b     c     d     e     f
+!byte	<mBRK,<mORA,<mKIL,<mSLO,<mNOP,<mORA,<mASL,<mSLO,<mPHP,<mORA,<mASL,<mANC,<mNOP,<mORA,<mASL,<mSLO ; 0
+!byte	<mBPL,<mORA,<mKIL,<mSLO,<mNOP,<mORA,<mASL,<mSLO,<mCLC,<mORA,<mNOP,<mSLO,<mNOP,<mORA,<mASL,<mSLO ; 1
+!byte	<mJSR,<mAND,<mKIL,<mRLA,<mBIT,<mAND,<mROL,<mRLA,<mPLP,<mAND,<mROL,<mANC,<mBIT,<mAND,<mROL,<mRLA ; 2
+!byte	<mBMI,<mAND,<mKIL,<mRLA,<mNOP,<mAND,<mROL,<mRLA,<mSEC,<mAND,<mNOP,<mRLA,<mNOP,<mAND,<mROL,<mRLA ; 3
+!byte	<mRTI,<mEOR,<mKIL,<mSRE,<mNOP,<mEOR,<mLSR,<mSRE,<mPHA,<mEOR,<mLSR,<mALR,<mJMP,<mEOR,<mLSR,<mSRE ; 4
+!byte	<mBVC,<mEOR,<mKIL,<mSRE,<mNOP,<mEOR,<mLSR,<mSRE,<mCLI,<mEOR,<mNOP,<mSRE,<mNOP,<mEOR,<mLSR,<mSRE ; 5
+!byte	<mRTS,<mADC,<mKIL,<mRRA,<mNOP,<mADC,<mROR,<mRRA,<mPLA,<mADC,<mROR,<mARR,<mJMP,<mADC,<mROR,<mRRA ; 6
+!byte	<mBVS,<mADC,<mKIL,<mRRA,<mNOP,<mADC,<mROR,<mRRA,<mSEI,<mADC,<mNOP,<mRRA,<mNOP,<mADC,<mROR,<mRRA ; 7
+!byte	<mNOP,<mSTA,<mNOP,<mSAX,<mSTY,<mSTA,<mSTX,<mSAX,<mDEY,<mNOP,<mTXA,<mXAA,<mSTY,<mSTA,<mSTX,<mSAX ; 8
+!byte	<mBCC,<mSTA,<mKIL,<mSHA,<mSTY,<mSTA,<mSTX,<mSAX,<mTYA,<mSTA,<mTXS,<mTAS,<mSHY,<mSTA,<mSHX,<mSHA ; 9
+!byte	<mLDY,<mLDA,<mLDX,<mLAX,<mLDY,<mLDA,<mLDX,<mLAX,<mTAY,<mLDA,<mTAX,<mLAX,<mLDY,<mLDA,<mLDX,<mLAX ; a
+!byte	<mBCS,<mLDA,<mKIL,<mLAX,<mLDY,<mLDA,<mLDX,<mLAX,<mCLV,<mLDA,<mTSX,<mLAS,<mLDY,<mLDA,<mLDX,<mLAX ; b
+!byte	<mCPY,<mCMP,<mNOP,<mDCP,<mCPY,<mCMP,<mDEC,<mDCP,<mINY,<mCMP,<mDEX,<mAXS,<mCPY,<mCMP,<mDEC,<mDCP ; c
+!byte	<mBNE,<mCMP,<mKIL,<mDCP,<mNOP,<mCMP,<mDEC,<mDCP,<mCLD,<mCMP,<mNOP,<mDCP,<mNOP,<mCMP,<mDEC,<mDCP ; d
+!byte	<mCPX,<mSBC,<mNOP,<mISC,<mCPX,<mSBC,<mINC,<mISC,<mINX,<mSBC,<mNOP,<mSBC,<mCPX,<mSBC,<mINC,<mISC ; e
+!byte	<mBEQ,<mSBC,<mKIL,<mISC,<mNOP,<mSBC,<mINC,<mISC,<mSED,<mSBC,<mNOP,<mISC,<mNOP,<mSBC,<mINC,<mISC ; f
+
+
+amode_matrix
+; Address mode codes
+;------------------------------------------------------------------------------
+;	  0     1     2     3     4     5     6     7     8     9     a     b     c     d     e     f
+!byte	 aIMP, aINX, aKIL, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aAKK, bIMM, aABS, aABS, aABS, aABS ; 0
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPX, aIMP, aABY, bIMP, aABY, aABX, aABX, aABX, aABX ; 1
+!byte	 aABS, aINX, aKIL, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aAKK, aIMM, aABS, aABS, aABS, aABS ; 2
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPY, aIMP, aABY, bIMP, aABY, aABX, aABX, aABX, aABX ; 3
+!byte	 aIMP, aINX, aKIL, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aAKK, aIMM, aABS, aABS, aABS, aABS ; 4
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPX, aIMP, aABY, bIMP, aABY, aABX, aABX, aABX, aABX ; 5
+!byte	 aIMP, aINX, aKIL, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aAKK, aIMM, aIND, aABS, aABS, aABS ; 6
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPX, aIMP, aABY, bIMP, aABY, aABX, aABX, aABX, aABX ; 7
+!byte	 aIMM, aINX, aIMM, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aIMP, aIMM, aABS, aABS, aABS, aABS ; 8
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPY, aZPY, aIMP, aABY, aIMP, aABY, aABX, aABX, aABY, aABY ; 9
+!byte	 aIMM, aINX, aIMM, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aIMP, aIMM, aABS, aABS, aABS, aABS ; a
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPY, aZPY, aIMP, aABY, aIMP, aABY, aABX, aABX, aABY, aABY ; b
+!byte	 aIMM, aINX, aIMM, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aIMP, aIMM, aABS, aABS, aABS, aABS ; c
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPX, aIMP, aABY, bIMP, aABY, aABX, aABX, aABX, aABX ; d
+!byte	 aIMM, aINX, aIMM, aINX, aZP,  aZP,  aZP,  aZP,  aIMP, aIMM, aIMP, aIMM, aABS, aABS, aABS, aABS ; e
+!byte	 aREL, aINY, aKIL, aINY, aZPX, aZPX, aZPX, aZPX, aIMP, aABY, aIMP, aABY, aABX, aABX, aABX, aABX ; f
+
+
+!if (0) {
+	hIMP = aIMP << 4	; Address modes as high nibbles for combined
+	hAKK = aAKK << 4	; Instruction length and amode table
+	hKIL = aKIL << 4
+
+	hIMM = aIMM << 4
+	hINX = aINX << 4
+	hINY = aINY << 4
+	hZP  = aZP  << 4
+	hZPX = aZPX << 4
+	hZPY = aZPY << 4
+
+	hREL = aREL << 4
+
+	hABS = aABS << 4
+	hABX = aABX << 4
+	hABY = aABY << 4
+	hIND = aIND << 4
+amode_cycle_matrix
+;------------------------------------------------------------------------------
+;	  0       1       2       3       4       5       6       7       8       9       a       b       c       d       e       f
+!byte	 hIMP|0, hINX|6, hKIL|0, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|3, hIMM|2, hAKK|2, bIMM|2, hABS|4, hABS|4, hABS|6, hABS|6 ; 0
+!byte	 hREL|3, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPX|6, hIMP|2, hABY|4, bIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; 1
+!byte	 hABS|6, hINX|6, hKIL|0, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|4, hIMM|2, hAKK|2, hIMM|2, hABS|4, hABS|4, hABS|6, hABS|6 ; 2
+!byte	 hREL|2, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPY|6, hIMP|2, hABY|4, bIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; 3
+!byte	 hIMP|6, hINX|6, hKIL|0, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|3, hIMM|2, hAKK|2, hIMM|2, hABS|3, hABS|4, hABS|6, hABS|6 ; 4
+!byte	 hREL|3, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPX|6, hIMP|2, hABY|4, bIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; 5
+!byte	 hIMP|6, hINX|6, hKIL|0, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|4, hIMM|2, hAKK|2, hIMM|2, hIND|5, hABS|4, hABS|6, hABS|6 ; 6
+!byte	 hREL|2, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPX|6, hIMP|2, hABY|4, bIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; 7
+!byte	 hIMM|2, hINX|6, hIMM|2, hINX|6, hZP |3,  hZP|3,  hZP|3,  hZP|3, hIMP|2, hIMM|2, hIMP|2, hIMM|2, hABS|4, hABS|4, hABS|4, hABS|4 ; 8
+!byte	 hREL|3, hINY|6, hKIL|0, hINY|6, hZPX|4, hZPX|4, hZPY|4, hZPY|4, hIMP|2, hABY|5, hIMP|2, hABY|5, hABX|5, hABX|5, hABY|5, hABY|5 ; 9
+!byte	 hIMM|2, hINX|6, hIMM|2, hINX|6, hZP |3,  hZP|3,  hZP|3,  hZP|3, hIMP|2, hIMM|2, hIMP|2, hIMM|2, hABS|4, hABS|4, hABS|4, hABS|4 ; h
+!byte	 hREL|2, hINY|5, hKIL|0, hINY|5, hZPX|4, hZPX|4, hZPY|4, hZPY|4, hIMP|2, hABY|4, hIMP|2, hABY|4, hABX|4, hABX|4, hABY|4, hABY|4 ; b
+!byte	 hIMM|2, hINX|6, hIMM|2, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|2, hIMM|2, hIMP|2, hIMM|2, hABS|4, hABS|4, hABS|6, hABS|6 ; c
+!byte	 hREL|3, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPX|6, hIMP|2, hABY|4, bIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; d
+!byte	 hIMM|2, hINX|6, hIMM|2, hINX|8, hZP |3,  hZP|3,  hZP|5,  hZP|5, hIMP|2, hIMM|2, hIMP|2, hIMM|2, hABS|4, hABS|4, hABS|6, hABS|6 ; e
+!byte	 hREL|2, hINY|5, hKIL|0, hINY|8, hZPX|4, hZPX|4, hZPX|6, hZPX|6, hIMP|2, hABY|4, hIMP|2, hABY|7, hABX|4, hABX|4, hABX|7, hABX|7 ; f
+}
+
+cycle_matrix
+;------------------------------------------------------------------------------
+;	0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+!byte	 0, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6	; 00
+!byte	 3, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; 10
+!byte	 6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6	; 20
+!byte	 2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; 30
+!byte	 6, 6, 0, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6	; 40
+!byte	 3, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; 50
+!byte	 6, 6, 0, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6	; 60
+!byte	 2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; 70
+!byte	 2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4	; 80
+!byte	 3, 6, 0, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5	; 90
+!byte	 2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4	; a0
+!byte	 2, 5, 0, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4	; b0
+!byte	 2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6	; c0
+!byte	 3, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; d0
+!byte	 2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6	; e0
+!byte	 2, 5, 0, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7	; f0
+
+
+;==============================================================================
+!zone MNEMONICS
+;==============================================================================
+; Due to the !align above, this table starts at $xx00. The table has less than
+; 256/3 entries, so the high byte is the same for every entry. Therefore we do
+; not need to store 16-bit pointers in  opcode_matrix  - the high byte is
+; implicitly  #>mnemonic_names .
+
+mnemonic_names
+;------------------------------------------------------------------------------
+mLDA		!pet	"lda"		; 00
+mLDX		!pet	"ldx"		; 01
+mLDY		!pet	"ldy"		; 02
+mSTA		!pet	"sta"		; 03
+mSTX		!pet	"stx"		; 04
+mSTY		!pet	"sty"		; 05
+mTAX		!pet	"tax"		; 06
+mTAY		!pet	"tay"		; 07
+mTXA		!pet	"txa"		; 08
+mTYA		!pet	"tya"		; 09
+mTSX		!pet	"tsx"		; 0a
+mTXS		!pet	"txs"		; 0b
+mAND		!pet	"and"		; 0c
+mORA		!pet	"ora"		; 0d
+mEOR		!pet	"eor"		; 0e
+mADC		!pet	"adc"		; 0f
+mSBC 		!pet	"sbc"		; 10
+mINC		!pet	"inc"		; 11
+mDEC		!pet	"dec"		; 12
+mINX		!pet	"inx"		; 13
+mINY		!pet	"iny"		; 14
+mDEX		!pet	"dex"		; 15
+mDEY		!pet	"dey"		; 16
+mASL		!pet	"asl"		; 17
+mLSR		!pet	"lsr"		; 18
+mROL		!pet	"rol"		; 19
+mROR		!pet	"ror"		; 1a
+mCMP		!pet	"cmp"		; 1b
+mCPX		!pet	"cpx"		; 1c
+mCPY		!pet	"cpy"		; 1d
+mBIT		!pet	"bit"		; 1e
+mJMP		!pet	"jmp"		; 1f
+mJSR		!pet	"jsr"		; 20
+mRTS		!pet	"rts"		; 21
+mRTI		!pet	"rti"		; 22
+mBCC		!pet	"bcc"		; 23
+mBCS		!pet	"bcs"		; 24
+mBEQ		!pet	"beq"		; 25
+mBNE		!pet	"bne"		; 26
+mBPL		!pet	"bpl"		; 27
+mBMI		!pet	"bmi"		; 28
+mBVC		!pet	"bvc"		; 29
+mBVS		!pet	"bvs"		; 2a
+mSEC		!pet	"sec"		; 2b
+mCLC		!pet	"clc"		; 2c
+mSEI		!pet	"sei"		; 2d
+mCLI		!pet	"cli"		; 2e
+mCLV		!pet	"clv"		; 2f
+mSED		!pet	"sed"		; 30
+mCLD		!pet	"cld"		; 31
+mPHA		!pet	"pha"		; 32
+mPLA		!pet	"pla"		; 33
+mPHP		!pet	"php"		; 34
+mPLP		!pet	"plp"		; 35
+mNOP		!pet	"nop"		; 36
+mBRK		!pet	"brk"		; 37
+;------------------------------------------------------------------------------
+; Illegal opcodes
+mSLO		!pet	"slo"		; 38	ASL + ORA
+mRLA		!pet	"rla"		; 39	ROL + ANO
+mSRE		!pet	"sre"		; 3a	LSR + EOR
+mRRA		!pet	"rra"		; 3b	ROR + ADC
+mSAX		!pet	"sax"		; 3c	A AND X, ST A
+mSHA		!pet	"sha"		; 3d
+mLAX		!pet	"lax"		; 3e	LOA + LOX
+mDCP		!pet	"dcp"		; 3f	DEC + CMP
+mISC		!pet	"isc"		; 40	INC + SBC
+mANC		!pet	"anc"		; 41
+mALR		!pet	"alr"		; 42
+mARR		!pet	"arr"		; 43
+mXAA		!pet	"xaa"		; 44
+mTAS		!pet	"tas"		; 45
+mAXS		!pet	"axs"		; 46
+mSHY		!pet	"shy"		; 47
+mSHX		!pet	"shx"		; 48
+mLAS		!pet	"las"		; 49
+mKIL		!pet	"???"		; 4a
+
+		;;!byte 0
+
+
+;==============================================================================
+!zone AFFECTED_FLAGS
+;==============================================================================
+; https://www.atarimax.com/jindroush.atari.org/aopc.html
+;  s_flag_names  is found in  elfn_registers.a .
+
+affected_flags
+;------------------------------------------------------------------------------
+fLDA		!byte	%10000010, 0,0	; 00
+fLDX		!byte	%10000010, 0,0	; 01
+fLDY		!byte	%10000010, 0,0	; 02
+fSTA		!byte	%00000000, 0,0	; 03
+fSTX		!byte	%00000000, 0,0	; 04
+fSTY		!byte	%00000000, 0,0	; 05
+fTAX		!byte	%10000010, 0,0	; 06
+fTAY		!byte	%10000010, 0,0	; 07
+fTXA		!byte	%10000010, 0,0	; 08
+fTYA		!byte	%10000010, 0,0	; 09
+fTSX		!byte	%00000000, 0,0	; 0a
+fTXS		!byte	%00000000, 0,0	; 0b
+fAND		!byte	%10000010, 0,0	; 0c
+fORA		!byte	%10000010, 0,0	; 0d
+fEOR		!byte	%10000010, 0,0	; 0e
+fADC		!byte	%11000011, 0,0	; 0f
+fSBC		!byte	%11000011, 0,0	; 10
+fINC		!byte	%10000010, 0,0	; 11
+fDEC		!byte	%10000010, 0,0	; 12
+fINX		!byte	%10000010, 0,0	; 13
+fINY		!byte	%10000010, 0,0	; 14
+fDEX		!byte	%10000010, 0,0	; 15
+fDEY		!byte	%10000010, 0,0	; 16
+fASL		!byte	%10000011, 0,0	; 17
+fLSR		!byte	%10000011, 0,0	; 18
+fROL		!byte	%10000011, 0,0	; 19
+fROR		!byte	%10000011, 0,0	; 1a
+fCMP		!byte	%10000011, 0,0	; 1b
+fCPX		!byte	%10000011, 0,0	; 1c
+fCPY		!byte	%10000011, 0,0	; 1d
+fBIT		!byte	%11000010, 0,0	; 1e
+fJMP		!byte	%00000000, 0,0	; 1f
+fJSR		!byte	%00000000, 0,0	; 20
+fRTS		!byte	%00000000, 0,0	; 21
+fRTI		!byte	%11011111, 0,0	; 22
+fBCC		!byte	%00000000, 0,0	; 23
+fBCS		!byte	%00000000, 0,0	; 24
+fBEQ		!byte	%00000000, 0,0	; 25
+fBNE		!byte	%00000000, 0,0	; 26
+fBPL		!byte	%00000000, 0,0	; 27
+fBMI		!byte	%00000000, 0,0	; 28
+fBVC		!byte	%00000000, 0,0	; 29
+fBVS		!byte	%00000000, 0,0	; 2a
+fSEC		!byte	%00000001, 0,0	; 2b
+fCLC		!byte	%00000001, 0,0	; 2c
+fSEI		!byte	%00000100, 0,0	; 2d
+fCLI		!byte	%00000100, 0,0	; 2e
+fCLV		!byte	%01000000, 0,0	; 2f
+fSED		!byte	%00001000, 0,0	; 30
+fCLD		!byte	%00001000, 0,0	; 31
+fPHA		!byte	%00000000, 0,0	; 32
+fPLA		!byte	%00000000, 0,0	; 33
+fPHP		!byte	%00000000, 0,0	; 34
+fPLP		!byte	%00000000, 0,0	; 35
+fNOP		!byte	%00000000, 0,0	; 36
+fBRK		!byte	%00010000, 0,0	; 37
+;------------------------------------------------------------------------------
+; Illegal opcodes
+fSLO		!byte	%10000011, 0,0	; 38
+fRLA		!byte	%10000011, 0,0	; 39
+fSRE		!byte	%10000011, 0,0	; 3a
+fRRA		!byte	%11000011, 0,0	; 3b
+fSAX		!byte	%00000000, 0,0	; 3c
+fSHA		!byte	%00000000, 0,0	; 3d	AHX
+fLAX		!byte	%10000010, 0,0	; 3e
+fDCP		!byte	%10000011, 0,0	; 3f
+fISC		!byte	%11000011, 0,0	; 40
+fANC		!byte	%10000011, 0,0	; 41
+fALR		!byte	%10000011, 0,0	; 42
+fARR		!byte	%11000011, 0,0	; 43
+fXAA		!byte	%10000010, 0,0	; 44
+fTAS		!byte	%00000000, 0,0	; 45
+fAXS		!byte	%10000011, 0,0	; 46
+fSHY		!byte	%00000000, 0,0	; 47
+fSHX		!byte	%00000000, 0,0	; 48
+fLAS		!byte	%10000010, 0,0	; 49
+fKIL		!byte	%10000010, 0,0	; 4a
+
+
+;==============================================================================
+!zone ADDRESS_MODES
+;==============================================================================
+
+amode_prefix
+;------------------------------------------------------------------------------
+.preIMP		!pet 0
+.preAKK		!pet 0
+.preKIL		!pet 0
+
+.preIMM		!pet "#"
+.preINX		!pet "("
+.preINY		!pet "("
+.preZP		!pet 0
+.preZPX		!pet 0
+.preZPY		!pet 0
+
+.preREL		!pet 0
+.preABS		!pet 0
+.preABX		!pet 0
+.preABY		!pet 0
+.preIND		!pet "("
+
+
+amode_postfix
+;------------------------------------------------------------------------------
+.postIMP	!pet 0,0,0,0
+.postAKK	!pet 0,0,0,0
+.postKIL	!pet 0,0,0,0
+
+.postIMM	!pet 0,0,0,0
+.postINX	!pet ",x)",0
+.postINY	!pet "),y",0
+.postZP		!pet 0,0,0,0
+.postZPX	!pet ",x",0,0
+.postZPY	!pet ",y",0,0
+
+.postREL	!pet 0,0,0,0
+.postABS	!pet 0,0,0,0
+.postABX	!pet ",x",0,0
+.postABY	!pet ",y",0,0
+.postIND	!pet ")",0,0,0
+
+
+;==============================================================================
+!zone GET_INSTRUCTION_LENGTH
+;==============================================================================
+
+ilen_table
+;------------------------------------------------------------------------------
+	!byte 1,1,1		; aIMP, aAKK, aKIL
+	!byte 2,2,2,2,2,2,2	; aIMM, aINX, aINY, aZP, aZPX, aZPY, aREL
+	!byte 3,3,3,3		; aABS, aABX, aABY, aIND
+
+	.opcode = prev_rom_config
+	.temp_y	= $02
+
+get_instruction_length
+;==============================================================================
+; IN:	.A	int8	Opcode
+; OUT:	.A	int8	Length of instruction
+
+		STA .opcode
+		STY .temp_y		; Back up .Y
+!ifdef ILLEGAL_OPCODES {
+		LDY illegal_opcs	; Illegal opcodes enabled
+		BNE .skip_illegals	; Yes, no check needed
+
+		TAY			; Check, if illegal opcode
+		LDA opcode_matrix,Y	; Get index to mnemonic string
+		CMP # $38*3		; First illegal opcode string index
+		BCC .get_ilen		; Below: Not an illegal opcode
+		LDA # 1
+		BNE .ilen_done		; Will always jump
+.skip_illegals
+}
+.get_ilen	LDY .opcode
+		LDA amode_matrix,Y
+		TAY
+		LDA ilen_table,Y
+.ilen_done	LDY .temp_y
+		RTS
+
+
+!if (0) {
+;==============================================================================
+!zone REL_TO_ABS
+;==============================================================================
+; https://www.c64-wiki.com/wiki/Relative_addressing
+; If a branching instruction is situated at address a, and needs to branch to a
+; given address b, the single-byte offset argument that should follow the
+; opcode is calculated as b − a − 2.
+
+abs_to_rel
+;------------------------------------------------------------------------------
+; offset = target - address - 2
+
+		SEC
+		LDA .target
+		SBC .addr
+		SEC
+		SBC # 2
+
+		RTS
+
+rel_to_abs
+;------------------------------------------------------------------------------
+; target = offset + address + 2
+
+		CLC
+		LDA .offset
+		ADC .addr
+		STA .addr
+		LDA # 0
+		ADC .addr+1
+		STA .addr+1
+
+		CLC
+		LDA .addr
+		ADC # 2
+		STA .addr
+		LDA .addr+1
+		ADC # 0
+		STA .addr+1
+
+		RTS
+}
+
+
+;==============================================================================
+!eof

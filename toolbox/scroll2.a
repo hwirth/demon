@@ -1,0 +1,435 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+;==============================================================================
+!zone SCROLL
+;==============================================================================
+
+scroll_top	!byte 2			; Area to scroll (inclusive, base 0)
+scroll_btm	!byte 24
+scroll_left	!byte 0
+scroll_right	!byte 39
+
+scroll_raddr	!byte 0,0
+
+
+!ifdef TB_SCROLL_UP {
+;==============================================================================
+!zone SCROLL_UP
+;==============================================================================
+
+	.vsptr	= $f7			; VRAM source
+	.vtptr	= $f9			; VRAM target
+	.csptr	= $fb			; CRAM source
+	.ctptr	= $fd			; CRAM target
+
+	.PLACEHOLDER = 0
+
+scroll_up
+;-----------------------------------------------------------------------------
+; Move content in scroll area up: From top to bottom: Copy Xsptr to Xsptr-40
+
+		LDA #<VRAM		; Pointer to top line ("base pointer")
+		STA .vtptr
+		LDA #>VRAM
+		STA .vtptr+1
+
+		LDY scroll_top		; Add 40 for each line to omit
+		BEQ .base_ptr_done
+.base_ptr_loop	CLC
+		LDA .vtptr
+		ADC # 40
+		STA .vtptr
+		LDA .vtptr+1
+		ADC # 0
+		STA .vtptr+1
+		DEY
+		BNE .base_ptr_loop
+.base_ptr_done
+;-----------------------------------------------------------------------------
+		CLC			; Move base pointer to the right
+		LDA .vtptr
+		ADC scroll_left
+		STA .vtptr
+		LDA .vtptr+1
+		ADC # 0
+		STA .vtptr+1
+;-----------------------------------------------------------------------------
+		CLC			; Set source one line below target
+		LDA .vtptr
+		ADC # 40
+		STA .vsptr
+		LDA .vtptr+1
+		ADC # 0
+		STA .vsptr+1
+
+		CLC			; Calculate CRAM- from VRAM pointers
+		LDA .vtptr
+		ADC #<CRAM-VRAM
+		STA .ctptr
+		LDA .vtptr+1
+		ADC #>CRAM-VRAM
+		STA .ctptr+1
+
+		CLC
+		LDA .vsptr
+		ADC #<CRAM-VRAM
+		STA .csptr
+		LDA .vsptr+1
+		ADC #>CRAM-VRAM
+		STA .csptr+1
+;-----------------------------------------------------------------------------
+		SEC			; Calculate line length
+		LDA scroll_right
+		SBC scroll_left
+		STA .loop_row + 1	; Save to LDY #.PLACEHOLDER
+		STA .init_clear + 1	; Save to LDY #.PLACEHOLDER
+
+		CLC			; Calculate number of iterations
+		LDA scroll_btm
+		SBC scroll_top
+		TAX
+
+.loop_row	LDY #.PLACEHOLDER	; Copy line
+.loop_col	LDA (.vsptr),Y
+		STA (.vtptr),Y
+		LDA (.csptr),Y
+		STA (.ctptr),Y
+		DEY
+		BPL .loop_col
+;-----------------------------------------------------------------------------
+		CLC			; Advance all pointers one line down
+		LDA .vsptr
+		ADC # 40
+		STA .vsptr
+		LDA .vsptr+1
+		ADC # 0
+		STA .vsptr+1
+
+		CLC
+		LDA .vtptr
+		ADC # 40
+		STA .vtptr
+		LDA .vtptr+1
+		ADC # 0
+		STA .vtptr+1
+
+		CLC
+		LDA .csptr
+		ADC # 40
+		STA .csptr
+		LDA .csptr+1
+		ADC # 0
+		STA .csptr+1
+
+		CLC
+		LDA .ctptr
+		ADC # 40
+		STA .ctptr
+		LDA .ctptr+1
+		ADC # 0
+		STA .ctptr+1
+;-----------------------------------------------------------------------------
+		DEX
+		BPL .loop_row
+
+		LDA #' '
+.init_clear	LDY #.PLACEHOLDER	; Clear last line
+.loop_clear	STA (.vtptr),Y
+		DEY
+		BPL .loop_clear
+
+		RTS
+
+} ; TB_SCROLL_UP
+
+
+!ifdef TB_SCROLL_DOWN {
+;==============================================================================
+!zone SCROLL_DOWN
+;==============================================================================
+
+	.vsptr	= $f7
+	.vtptr	= $f9
+	.csptr	= $fb
+	.ctptr	= $fd
+
+	.PLACEHOLDER = 0
+
+scroll_down
+;-----------------------------------------------------------------------------
+; Move content in scroll area down: From bottom to top: Copy Xsptr to Xsptr+40
+
+		LDA #<VRAM+1000-40	; Pointer to btm. line ("base pointer")
+		STA .vtptr
+		LDA #>VRAM+1000-40
+		STA .vtptr+1
+
+		SEC			; Calculate nr. of lines to omit
+		LDA # 24
+		SBC scroll_btm
+		BEQ .base_ptr_done
+		TAY			; Subtract 40 for each line to omit
+.base_ptr_loop	SEC
+		LDA .vtptr
+		SBC # 40
+		STA .vtptr
+		LDA .vtptr+1
+		SBC # 0
+		STA .vtptr+1
+		DEY
+		BNE .base_ptr_loop
+.base_ptr_done
+;-----------------------------------------------------------------------------
+		CLC			; Move base pointer to the right
+		LDA .vtptr
+		ADC scroll_left
+		STA .vtptr
+		LDA .vtptr+1
+		ADC # 0
+		STA .vtptr+1
+;-----------------------------------------------------------------------------
+		SEC			; Set source one line above target
+		LDA .vtptr
+		SBC # 40
+		STA .vsptr
+		LDA .vtptr+1
+		SBC # 0
+		STA .vsptr+1
+
+		CLC			; Calculate CRAM- from VRAM pointers
+		LDA .vtptr
+		ADC #<CRAM-VRAM
+		STA .ctptr
+		LDA .vtptr+1
+		ADC #>CRAM-VRAM
+		STA .ctptr+1
+
+		CLC
+		LDA .vsptr
+		ADC #<CRAM-VRAM
+		STA .csptr
+		LDA .vsptr+1
+		ADC #>CRAM-VRAM
+		STA .csptr+1
+;-----------------------------------------------------------------------------
+		SEC			; Calculate line length
+		LDA scroll_right
+		SBC scroll_left
+		STA .loop_row + 1	; Save to LDY #.PLACEHOLDER
+		STA .init_clear + 1	; Save to LDY #.PLACEHOLDER
+
+		CLC			; Calculate number of iterations
+		LDA scroll_btm
+		SBC scroll_top
+		TAX
+
+.loop_row	LDY #.PLACEHOLDER	; Copy line
+.loop_col	LDA (.vsptr),Y
+		STA (.vtptr),Y
+		LDA (.csptr),Y
+		STA (.ctptr),Y
+		DEY
+		BPL .loop_col
+;-----------------------------------------------------------------------------
+		SEC			; Advance all pointers one line down
+		LDA .vsptr
+		SBC # 40
+		STA .vsptr
+		LDA .vsptr+1
+		SBC # 0
+		STA .vsptr+1
+
+		SEC
+		LDA .vtptr
+		SBC # 40
+		STA .vtptr
+		LDA .vtptr+1
+		SBC # 0
+		STA .vtptr+1
+
+		SEC
+		LDA .csptr
+		SBC # 40
+		STA .csptr
+		LDA .csptr+1
+		SBC # 0
+		STA .csptr+1
+
+		SEC
+		LDA .ctptr
+		SBC # 40
+		STA .ctptr
+		LDA .ctptr+1
+		SBC # 0
+		STA .ctptr+1
+;-----------------------------------------------------------------------------
+		DEX
+		BPL .loop_row
+
+		LDA #' '
+.init_clear	LDY #.PLACEHOLDER	; Clear last line
+.loop_clear	STA (.vtptr),Y
+		DEY
+		BPL .loop_clear
+
+		RTS
+
+} ; TB_SCROLL_DOWN
+
+
+!ifdef TB_SAVE_SCREEN {
+;==============================================================================
+!zone SAVE_SCREEN
+; PHA hi, PHA lo, JSR
+;==============================================================================
+
+	.tptr	= $f9			; VRAM target
+
+;!ifdef TOOLBOX {
+;sys_save_screen
+;		PLA
+;		STA scroll_raddr+1
+;		PLA
+;		STA scroll_raddr
+;
+;		JSR get_word
+;		JMP do_save_screen
+;}
+jsr_save_screen
+		PLA
+		STA scroll_raddr+1
+		PLA
+		STA scroll_raddr
+do_save_screen
+		CLC
+		PLA
+		STA .tptr		; Save VRAM to given address
+		ADC #<1000
+		STA $58			; Destination end address lo
+		PLA
+		STA .tptr+1
+		ADC #>1000
+		STA $59			; Destination end address lo
+
+		CLC
+		LDA #<VRAM
+		STA $5f			; Source start address lo
+		LDA #>VRAM
+		STA $60			; Source start address hi
+		LDA #<VRAM+1000
+		STA $5a			; Source end address lo
+		ADC #>VRAM+1000
+		STA $5b			; Source end address hi
+
+		JSR $a3bf		; Move bytes
+;-----------------------------------------------------------------------------
+		CLC
+		LDA .tptr		; Save CRAM 1000 bytes after VRAM
+		ADC #<1000
+		STA $58			; Destination end address lo
+		PLA
+		LDA .tptr+1
+		ADC #>1000
+		STA $59			; Destination end address lo
+
+		CLC
+		LDA #<CRAM
+		STA $5f			; Source start address lo
+		LDA #>CRAM
+		STA $60			; Source start address hi
+		LDA #<CRAM+1000
+		STA $5a			; Source end address lo
+		ADC #>CRAM+1000
+		STA $5b			; Source end address hi
+
+		JSR $a3bf		; Move bytes
+;-----------------------------------------------------------------------------
+		LDA scroll_raddr
+		PHA
+		LDA scroll_raddr+1
+		PHA
+		RTS
+
+} ; TB_SAVE_SCREEN
+
+
+!ifdef TB_LOAD_SCREEN {
+;==============================================================================
+!zone LOAD_SCREEN
+;==============================================================================
+
+	.sptr	= $f9			; VRAM target
+
+;!ifdef TOOLBOX {
+;sys_load_screen
+;		PLA
+;		STA scroll_raddr+1
+;		PLA
+;		STA scroll_raddr
+;
+;		JSR get_word
+;		JMP do_load_screen
+;}
+jsr_load_screen
+		PLA
+		STA scroll_raddr+1
+		PLA
+		STA scroll_raddr
+do_load_screen
+		CLC
+		PLA
+		STA .sptr
+		STA $5f			; Source start address lo
+		ADC #<1000
+		STA $5a			; Source end address lo
+		PLA
+		STA .sptr+1
+		STA $60			; Source start address hi
+		ADC #>1000
+		STA $5b			; Source end address hi
+
+		LDA #<VRAM+1000		; Load VRAM from given address
+		STA $58			; Destination end address lo
+		LDA #>VRAM+1000
+		STA $59			; Destination end address lo
+
+		JSR $a3bf		; Move bytes
+;-----------------------------------------------------------------------------
+		CLC
+		LDA .sptr		; Save CRAM 1000 bytes after VRAM
+		ADC #<1000
+		STA $5f			; Source start address lo
+		PLA
+		LDA .sptr+1
+		ADC #>1000
+		STA $60			; Source start address hi
+
+		CLC
+		LDA $5f
+		ADC #<1000
+		STA $5a			; Source end address lo
+		LDA $60
+		ADC #>1000
+		STA $5b			; Source end address hi
+
+		LDA #<CRAM+1000
+		STA $58			; Destination end address lo
+		LDA #>CRAM+1000
+		STA $59			; Destination end address lo
+
+		JSR $a3bf		; Move bytes
+;-----------------------------------------------------------------------------
+		LDA scroll_raddr
+		PHA
+		LDA scroll_raddr+1
+		PHA
+		RTS
+
+} ; TB_LOAD_SCREEN
+
+
+;==============================================================================
+!eof

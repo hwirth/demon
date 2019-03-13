@@ -1,0 +1,691 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+; Functions elfn_transfer, elfn_relocate, workspace_insert and workspace_delete
+; use the ZP pointers $c1-$c4, $f7-$fc for the same purposes, so some functions
+; can jump directly into others. E.g workspace_insert/delete prepare pointers
+; and jump into elfn_relocate, circumventing the parsing part of that function.
+; elfn_relocate itself does the same with elfn_transfer.
+;
+;  .bptr = $c1  "Begin (original start)"
+;  .wptr = $c3  "Window End"
+;  .sptr = $f7  "Start", also used as "Window Start"
+;  .eptr = $f9  "End"
+;  .tptr = $fb  "Target"
+;------------------------------------------------------------------------------
+
+
+;==============================================================================
+!zone ELFN_TRANSFER
+;==============================================================================
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. relocate, workspace_ins/del
+	.tptr	= $fb			;
+
+.error		JMP line_show_error
+
+elfn_transfer
+;==============================================================================
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr
+		STA .sptr+1
+
+		JSR line_expect_int16
+		BCS .error
+		STX .eptr
+		STA .eptr+1
+
+		DEY
+		DEY
+		LDA .sptr+1
+		CMP .eptr+1
+		BCC .range_ok
+		BNE .error		; Error: start > end
+		LDA .sptr
+		CMP .eptr
+		BCS .error		; Error: start >= end
+
+.range_ok	INY
+		INY
+		JSR line_expect_int16
+		BCS .error
+		STX .tptr
+		STA .tptr+1
+
+		; elfn_relocate jumps here:
+start_transfer
+break	INC $d020
+		LDA .tptr+1		; Find transfer direction
+		CMP .sptr+1
+		BCC .transfer_down	; target < source.
+		BEQ .check_lobyte
+		BCS .transfer_up	; target > source. Will always jump.
+
+.check_lobyte	LDA .tptr
+		CMP .sptr
+		BCC .transfer_down	; target < source.
+;------------------------------------------------------------------------------
+.transfer_up	SEC			; Add length to target pointer, since
+		LDA .eptr		; we are walking down
+		SBC .sptr
+		TAX
+		LDA .eptr+1		; Calculate length of area to copy
+		SBC .sptr+1
+		TAY
+
+		CLC			; Add length to target pointer
+		TXA
+		ADC .tptr
+		STA .tptr
+		TYA
+		ADC .tptr+1
+		STA .tptr+1
+
+		LDY # 0
+
+.loop_up_hi	LDA .eptr+1
+		CMP .sptr+1
+		BEQ .loop_up_lo		; End hi = source hi? Check low byte.
+		BCS .cont_up		; End hi > source hi? Continue.
+		BCC .done		; End hi < source hi? Done.
+
+.loop_up_lo	LDA .eptr		; No: End lo < source lo?
+		CMP .sptr
+		BCC .done		; Yes: done
+
+.cont_up	LDA (.eptr),Y		; Transfer byte
+		STA (.tptr),Y
+
+		LDA #$ff
+
+		DEC .tptr		; Decrement target pointer
+		CMP .tptr
+		BNE .skip_e_hi
+		DEC .tptr+1
+.skip_e_hi
+		DEC .eptr		; Decrement source pointer
+		CMP .eptr
+		BNE .loop_up_hi
+		DEC .eptr+1
+		JMP .loop_up_hi
+
+;------------------------------------------------------------------------------
+.transfer_down	LDY # 0
+
+.loop_dn_hi	LDA .sptr+1
+		CMP .eptr+1		; Source hi < end hi?
+		BCC .cont_dn		; Yes: continue
+		BEQ .loop_dn_lo		; Source hi = end hi? Check low byte
+		BCS .done		; Source hi > end hi? Done.
+
+.loop_dn_lo	LDA .sptr		; No: Source lo >= end lo?
+		CMP .eptr
+		BEQ .cont_dn		; Source lo <= end lo? Continue.
+		BCS .done		; Yes: done
+
+.cont_dn	LDA (.sptr),Y		; Transfer byte
+		STA (.tptr),Y
+
+		INC .tptr		; Increment target pointer
+		BNE .skip_t_hi
+		INC .tptr+1
+.skip_t_hi
+		INC .sptr		; Increment source pointer
+		BNE .loop_dn_hi
+		INC .sptr+1
+		JMP .loop_dn_hi
+
+.done
+	DEC $d020
+		CLC			; Trigger newline
+		RTS
+
+
+!ifdef RELOCATE {
+;==============================================================================
+!zone ELFN_RELOCATE
+;==============================================================================
+
+	.bptr	= $c1			; Copy of .sptr, shared with ws_ins/del
+	.wptr	= $c3			; Copy of .eptr, shared with ws_ins/del
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. transfer, workspace_ins/del
+	.tptr	= $fb			;
+
+	.offset	= $fd
+	.opcode = $ff
+
+.error		JMP line_show_error
+
+elfn_relocate
+;==============================================================================
+		LDY # 1			; Get start addr of block to relocate
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr
+		STA .sptr+1
+
+		JSR line_expect_int16	; Get end addr of block to relocate
+		BCS .error
+		STX .eptr
+		STX .wptr
+		STA .eptr+1
+		STA .wptr+1
+
+		DEY
+		DEY
+		LDA .sptr+1
+		CMP .eptr+1
+		BCC .range_ok
+		BNE .error		; Error: start > end
+		LDA .sptr
+		CMP .eptr
+		BCS .error		; Error: start >= end
+
+.range_ok	INY
+		INY
+		JSR line_expect_int16	; Get target address
+		BCS .error
+		STX .tptr
+		STA .tptr+1
+;------------------------------------------------------------------------------
+start_relocate	JSR save_zp_pointers
+
+		JSR start_transfer	; Move memory
+
+		JSR restore_zp_pointers
+;------------------------------------------------------------------------------
+		; Adjust absolute addresses within the range
+
+		SEC			; Calculate offset for operands
+		LDA .tptr
+		SBC .sptr
+		STA .offset
+		LDA .tptr+1
+		SBC .sptr+1
+		STA .offset+1
+
+		CLC
+		LDA .sptr		; Copy  .sptr . It will move and we
+		STA .bptr		; need to check, if an address is in
+		LDA .sptr+1		; the moved block.
+		STA .bptr+1
+;==============================================================================
+start_adjust	; Check every instruction for absolute addresses, that point
+		; into the moved block and add the offset
+
+.offs_loop	LDY # 0
+.source_lda	LDA (.tptr),Y
+		STA .opcode
+		TAY
+		LDA amode_matrix,Y
+		CMP #aABS		; >= aABS: aABS, aABX, aABY, aIND
+		BCC .skip_instr		; Not an absolute address
+;------------------------------------------------------------------------------
+		; Check window
+
+		LDY # 2			; Load operand high byte
+		LDA (.tptr),Y
+.check_op_hi	CMP .bptr+1
+		BEQ .check_op_lo_begin
+		BCC .skip_instr		; Op < begin: no update
+		CMP .wptr+1
+		BEQ .check_op_lo_end	; Op = end: check low byte
+		BCS .skip_instr		; Op > end: no update
+		BCC .add_offset		; Op < end: add offset
+
+.check_op_lo_begin
+		DEY			; Load operand low byte
+		LDA (.tptr),Y
+		CMP .bptr		; op < begin?
+		BCC .skip_instr		; Yes: skip
+		INY
+		LDA (.tptr),Y		; Get operand high byte
+		CMP .wptr+1		; Same page as end?
+		BNE .add_offset		; Yes: check lo end
+.check_op_lo_end
+		DEY			; Load operand low byte
+		LDA (.tptr),Y
+		CMP .wptr
+		;BCC .add_offset	; Not needed
+		;;BEQ .add_offset
+		BCS .skip_instr
+
+.add_offset	LDY # 1			; Select operand low byte
+		CLC
+		LDA (.tptr),Y		; Add offset to operand
+		ADC .offset
+		STA (.tptr),Y
+		INY			; Select operand high byte
+		LDA (.tptr),Y
+		ADC .offset+1
+		STA (.tptr),Y
+;------------------------------------------------------------------------------
+		; Move pointers to next instruction
+
+.skip_instr	LDA .opcode
+		JSR get_instruction_length
+		TAX
+		CLC
+		ADC .tptr		; Move pointer to next address
+		STA .tptr
+		LDA .tptr+1
+		ADC # 0
+		STA .tptr+1
+
+		TXA
+		CLC
+		ADC .sptr		; Move pointer to next address
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+		;
+		CMP .eptr+1		; .sptr < .eptr?
+		BCC .offs_loop		; Yes: not done, continue loop
+		LDA .sptr		; High bytes equal
+		CMP .eptr		; .sptr < .eptr?
+		BCC .offs_loop		; Yes: continue
+;------------------------------------------------------------------------------
+		CLC			; Trigger newline
+		RTS
+
+} ; RELOCATE
+
+
+
+
+
+
+;==============================================================================
+!zone WORKSPACE_DELETE
+;==============================================================================
+; Delete a memory range, moving the following instructions down and adjusting
+; the addresses.
+; Syntax: -SSSS [EEEE]  Delete one instruction/memory range
+;
+; .sptr  Start of area to move over the deletees
+; .eptr  End of area to move over the deletees (workspace_end)
+; .tptr  Target for the block to be moved, start of deletees
+;
+; Wstart = workspace_start
+; Wend   = workspace_end
+; D      = [.tptr to .sptr-1]         Area to delete
+; Dlen   = (.sptr-1) - .tptr          Size of D
+; L      = [Wstart to .tptr-1]        Lower area
+; U      = [.tptr to Wend]            Upper area
+; Lrel   = [.tptr-127(?) to .tptr-1]  Area in L, that can point to U with aREL
+; Urel   = [.tptr to .tptr+127(?)]    Area in U, that can point to L with aREL
+;
+; Before:            After:
+; L 1000 JMP $1008   L 1000 JMP $1007
+; L 1003 BEQ $1006   L 1003 BEQ $1005
+; D 1005 DELETEE     U 1005 BEQ $1003
+; U 1006 BEQ $1003   U 1007 JMP $1005
+; U 1008 JMP $1006   U 100a BRK
+;
+; 1) Transfer U to .tptr
+; 2) Adjust (amode >= aABS) in [Wstart to Wend], if pointing to U
+; 3) Adjust aREL in Lrel, if pointing to U
+; 4) Adjust aREL in Urel, if pointing to L
+; 5) Clear [Wend-Dlen to Wend] (Fill with BRK)
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. relocate, transfer!
+	.tptr	= $fb			;
+	.aptr	= $fd
+
+	.opcode		= sr_zp_backup
+	.operand	= sr_zp_backup+1
+	.offset		= sr_zp_backup+3
+
+
+.error		JMP line_show_error
+
+workspace_delete
+;==============================================================================
+		LDY # 1			; Get start address of area to delete
+		JSR line_expect_int16
+		BCS .error
+		STX .tptr		; Moving remaining block to this addr!
+		STA .tptr+1
+
+		JSR line_expect_int16	; Get end address
+		BCC .start_del		; A second parameter was given
+;------------------------------------------------------------------------------
+		; Only one parameter was given, deleting just one instruction
+
+.delete_one	LDY # 0
+		LDA (.tptr),Y		; Get opcode
+
+		JSR get_instruction_length
+
+		CLC			; Start of remaining = .tptr + ilen
+		ADC .tptr
+		TAX
+		LDA .tptr+1
+		ADC # 0
+;==============================================================================
+		; 1) Transfer U to .tptr
+
+.start_del	STX .sptr		; Store start addres of remaining block
+		STA .sptr+1
+
+		LDA workspace_end	; End of block = end of workspace area
+		STA .eptr
+		LDA workspace_end+1
+		STA .eptr+1
+
+		SEC			; Calculate move distance
+		LDA .sptr
+		SBC .tptr
+		STA .offset
+		LDA .sptr+1
+		SBC .tptr+1
+		STA .offset+1
+
+		JSR save_zp_pointers
+		JSR start_transfer	; Copy [.sptr to .eptr] to .tptr
+		JSR restore_zp_pointers
+;==============================================================================
+		; 2) Adjust (amode >= aABS) in [Wstart to Wend], if points to U
+
+	DEC $d020
+		JSR save_zp_pointers
+
+		LDA workspace_start
+		STA .aptr
+		LDA workspace_start+1
+		STA .aptr+1
+;------------------------------------------------------------------------------
+.loop_abs	LDY # 0
+		LDA (.aptr),Y
+		STA .opcode		; Remember opcode for increasing .aptr
+		TAX
+		LDA amode_matrix,X
+		CMP #aABS
+		BCC .skip_abs		; amode >= aABS: aABS, aABX, aABY, aIND
+
+		INY			; Get operand and store it
+		LDA (.aptr),Y
+		STA .operand
+		INY
+		LDA (.aptr),Y
+		STA .operand+1
+		;
+.check_abs_ehi	CMP workspace_end+1	; Pointer to > Wend?
+		BEQ .check_abs_elo	; Same page, check low byte
+		BCS .skip_abs		; Points > Wend, don't change
+		BCC .check_abs_shi	; Points < Wend, check Ustart
+					; Will always jump
+.check_abs_elo	LDA .operand
+		CMP workspace_end
+		BEQ .adjust_abs		; Points to Wend: change
+		BCS .skip_abs		; Points beyond Wend, don't change
+
+.check_abs_shi	LDA .operand+1		; Pointer to < Ustart?
+		CMP .tptr+1
+		BCC .skip_abs		; Pointing below Ustart, don't change
+.check_abs_slo	LDA .operand
+		CMP .tptr
+		BEQ .skip_abs		; Pointing at Wstart, don't change
+		BCC .skip_abs		; Pointing below Wstart, don't change
+
+.adjust_abs	DEY			; Select operand lo
+		SEC
+		LDA .operand
+		SBC .offset
+		STA (.aptr),Y
+		INY
+		LDA .operand+1
+		SBC .offset+1
+		STA (.aptr),Y
+;------------------------------------------------------------------------------
+.skip_abs	LDA .opcode		; Retreive opcode
+		JSR get_instruction_length
+		CLC
+		ADC .aptr		; Set pointer to next instruction
+		STA .aptr
+		LDA .aptr+1
+		ADC # 0
+		STA .aptr+1
+		;
+.abs_end_hi	CMP workspace_end+1	; Check, if we reached Wend
+		BCC .loop_abs		; .aptr hi < Wend hi: Continue
+		BEQ .abs_end_lo		; .aptr hi = Wend hi: Check low byte
+		BCS .abs_done		; .aptr hi > Wend hi: Done
+					; Will always jump
+.abs_end_lo	LDA .aptr
+		CMP workspace_end
+		BCC .loop_abs		; .aptr lo <= Wend lo: Continue
+		BEQ .loop_abs
+.abs_done
+		JSR restore_zp_pointers
+	INC $d020
+;==============================================================================
+		; 3) Adjust aREL in Lrel, if pointing to U
+		JSR save_zp_pointers
+
+		JSR restore_zp_pointers
+;==============================================================================
+		; 4) Adjust aREL in Urel, if pointing to L
+		JSR save_zp_pointers
+
+		JSR restore_zp_pointers
+;==============================================================================
+		; 5) Clear [Wend-Dlen to Wend] (Fill with BRK)
+;==============================================================================
+		CLC
+		RTS
+
+
+
+
+;==============================================================================
+!zone WORKSPACE_INSERT
+;==============================================================================
+; Insert 1 - 3 bytes for a new instruction.
+; Called by  elfn_assemble.a:elfn_assemble .
+;
+;        .sptr=5, offs=2
+; ws_s     |     ws_e
+;  |   .---->----. |      Pointer from area below to above sptr
+;  1 2 3 4 5 6 7 8 9
+;    '----<----'          Pointer from area above to below sptr
+;
+; 1 2 3 4 5 6 7 8 9       Step 1: Relocate [sptr, ws_e] --> (sptr + offset)
+; 1 2 3 4     5 6 7 8 9   Step 2: Pseudo-reloc [ws_s, ws_e] --> (ws_s + offs)
+;------------------------------------------------------------------------------
+
+	.bptr	= $c1			; Shared with relocate!
+	.wptr	= $c3			; Shared with relocate!
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. relocate, transfer!
+	.tptr	= $fb			;
+
+	.offset	= $fd
+
+workspace_insert
+;------------------------------------------------------------------------------
+; IN:	.X/.A	int16	Address for new room
+;	.Y	int8	Number of bytes to make room for
+; OUT:	CARRY	Boolean	FALSE, if within workspace window
+
+		STX .sptr		; Save parameters
+		STA .sptr+1
+		STY .offset
+;------------------------------------------------------------------------------
+		; Step 1: Relocate [sptr, ws_e] --> (sptr + offset)
+
+		JSR save_zp_pointers
+					; sptr is already set
+
+		LDA workspace_end	; eptr := ws_e
+		STA .eptr
+		STA .wptr
+		LDA workspace_end+1
+		STA .eptr+1
+		STA .wptr+1
+
+		CLC			; .tptr := sptr + offset
+		LDA .sptr
+		ADC .offset
+		STA .tptr
+		LDA .sptr+1
+		ADC # 0
+		STA .tptr+1
+
+		JSR start_relocate
+		JSR restore_zp_pointers
+
+;------------------------------------------------------------------------------
+		; Step 2: Pseudo-reloc [ws_s, sptr-1] --> (ws_s + offs)
+
+		CLC
+		LDA .sptr		; Copy  .sptr . It will move and we
+		STA .bptr		; need to check, if an address is in
+		LDA .sptr+1		; the moved block.
+		STA .bptr+1
+
+		SEC			; eptr := sptr - 1
+		LDA .sptr
+		SBC # 1
+		STA .eptr
+		LDA .sptr+1
+		SBC # 0
+		STA .eptr+1
+
+		SEC			; sptr := ws_s
+		LDA workspace_start	; tptr := ws_s + offset
+		STA .tptr
+		SBC .offset
+		STA .sptr
+		LDA workspace_start+1
+		STA .tptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDA workspace_end
+		STA .wptr
+		LDA workspace_end+1
+		STA .wptr+1
+!if (1) { ;;
+		SEC			; Calculate offset for operands
+		LDA .tptr
+		SBC .sptr
+		STA .offset
+		LDA .tptr+1
+		SBC .sptr+1
+		STA .offset+1
+}
+		LDA workspace_start
+		STA .sptr
+		LDA workspace_start+1
+		STA .sptr+1
+
+		JMP start_adjust
+		;RTS
+
+
+
+
+
+
+
+
+
+
+
+!ifdef WORKSPACE {
+;==============================================================================
+!zone ELFN_WORKSPACE
+;==============================================================================
+; Sets the workspace boundaries, which are used by ws ins/del and relocate
+; Syntax: w[SSSS EEEE]  Show/set workspace area
+
+	.sptr	= $f7			; Temp. holder for start address
+
+.error		JMP line_show_error
+
+elfn_workspace
+;==============================================================================
+		LDY # 1
+
+		JSR line_expect_empty	; No parameters given?
+		BCC .show_workspace	; Yes: Show current setting
+
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr		; Do not yet save to variable, ..
+		STA .sptr+1
+
+		JSR line_expect_int16	; .. check for valid parameters first.
+		BCS .error
+		STX workspace_end
+		STA workspace_end+1
+
+		;; check .sptr < Wend
+
+		LDA .sptr
+		TAY			; Move low byte to .Y for clear loop
+		STA workspace_start
+		LDA .sptr+1
+		STA workspace_start+1
+;------------------------------------------------------------------------------
+		; Clear workspace
+!if (0) {
+	;; NEEDS A SWITCH - WE DON'T ALWAYS WANT TO CLEAR
+	;; ALSO SHOULD CALL FILL TO SAVE MEMORY
+		LDA # 0			; Low byte already in .Y
+		STA .sptr
+.loop_clear	STA (.sptr),Y
+		INY			; Increment low byte
+		BNE .check_end_hi
+		INC .sptr+1		; Increment high byte
+.check_end_hi	LDX .sptr+1
+		CPX workspace_end+1	; Check .sptr hi
+		BCC .loop_clear		; .sptr hi < Wend hi? Continue
+		BEQ .check_end_lo
+		BCS .clear_done
+.check_end_lo	CPY workspace_end	; .sptr hi = Wend hi. Check .sptr lo
+		BCC .loop_clear
+		BEQ .loop_clear		; .sptr lo <= Wend lo? Continue
+.clear_done
+}
+;------------------------------------------------------------------------------
+		CLC			; Trigger newline
+		RTS
+
+.show_workspace
+;------------------------------------------------------------------------------
+		LDX # 1
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		LDA workspace_start+1
+		JSR puts_hexbyte
+		LDA workspace_start
+		JSR puts_hexbyte
+
+		LDA #' '
+		JSR putc
+
+		LDA workspace_end+1
+		JSR puts_hexbyte
+		LDA workspace_end
+		JSR puts_hexbyte
+
+		CLC
+		RTS
+
+} ; WORKSPACE
+
+
+;==============================================================================
+!eof

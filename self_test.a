@@ -1,0 +1,694 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone SELF_TEST
+;==============================================================================
+
+	OVERWRITE_GOOD = 1
+	;TEST_STRING = 1			; End lines with #0 (EOS marker)
+	.error_color = cram_lred
+
+.rptr		!byte 0,0		; RAM (source) pointer
+.rbak		!byte 0,0		; Backup for printing address
+.legal_opcs	!byte 0
+.total_opcs	!byte 0
+.parse_errors	!byte 0
+.asm_errors	!byte 0
+
+	.sptr	= $f7
+	.tptr	= $f9
+	.lctr	= $ff			; Line counter for pausing output
+	.strbuf	= TAPE_BUFFER
+
+
+self_test
+;==============================================================================
+		; Initialize self-test
+
+		LDX #<legal_opcodes	; Dis- and re-assemble this routine
+		LDA #>legal_opcodes
+		STX .rptr
+		STA .rptr+1
+
+		LDA # 0			; Initialize counters
+		STA .legal_opcs
+		STA .total_opcs
+		STA .parse_errors
+		STA .asm_errors
+
+		LDA #<s_selftest	; Start message
+		PHA
+		LDA #>s_selftest
+		PHA
+		JSR puts
+
+		LDA #<s_legal_opcodes	; Start message
+		PHA
+		LDA #>s_legal_opcodes
+		PHA
+		JSR puts
+
+		LDA # 5			; Account for already printed lines
+		STA .lctr
+;------------------------------------------------------------------------------
+		; Test instructions, pause after each page
+
+.loop		LDA .rptr		; Select next instruction
+		CMP #<opcodes_end	; End of test code reached?
+		BNE .cont_1
+		LDA .rptr+1
+		CMP #>opcodes_end
+		BEQ .done
+
+.cont_1		LDA .rptr
+		CMP #<illegal_opcodes
+		BNE .cont_2
+		LDA .rptr+1
+		CMP #>illegal_opcodes
+		BNE .cont_2
+
+		LDA #<s_illegal_opcodes
+		PHA
+		LDA #>s_illegal_opcodes
+		PHA
+		JSR puts
+		INC .lctr
+		INC .lctr
+		INC .lctr
+		LDA .total_opcs
+		STA .legal_opcs
+
+.cont_2		LDA .lctr		; Screen filled with new information?
+		CMP # 18
+		BCC .test		; No: test next instruction
+
+		LDA #<s_press_any_key
+		PHA
+		LDA #>s_press_any_key
+		PHA
+		LDX zp_crsr_col
+		LDY zp_crsr_row
+		JSR puts_xy
+		JSR call_get_key
+		CPX #$03		; Check for Run/Stop key
+		BEQ .exit
+		CPX #petscii_larr
+		BEQ .exit
+
+		LDA # 0			; Print another page
+		STA .lctr
+
+.test		JSR .test_dis_asm	; Test instruction
+		INC .total_opcs
+		JMP .loop
+
+.exit		SEC			; Prevent newline
+		RTS
+
+;------------------------------------------------------------------------------
+		; Print test summary
+
+.done		LDA #<s_space_40+10	; Clear last comparison line
+		PHA
+		LDA #>s_space_40+10
+		PHA
+		LDX zp_crsr_col
+		LDY zp_crsr_row
+		JSR puts_xy
+
+		LDA #$0d		; Newline
+		JSR putc
+
+		LDA .total_opcs
+		JSR byte_to_str
+		STA s_tested_opcs
+		STX s_tested_opcs+1
+		STY s_tested_opcs+2
+
+		LDA .legal_opcs
+		JSR byte_to_str
+		STA s_legal_opcs
+		STX s_legal_opcs+1
+		STY s_legal_opcs+2
+
+		SEC
+		LDA .total_opcs
+		SBC .legal_opcs
+		JSR byte_to_str
+		STA s_illegal_opcs
+		STX s_illegal_opcs+1
+		STY s_illegal_opcs+2
+
+		CLC
+		LDA .total_opcs
+		ADC # 36
+		CMP # 0
+		BNE +
+		LDA #'2'
+		LDX #'5'
+		LDY #'6'
+		BNE ++
++		JSR byte_to_str
+++		STA s_total_opcs
+		STX s_total_opcs+1
+		STY s_total_opcs+2
+
+		LDA .parse_errors	; Save nr. of errors to string
+		JSR byte_to_str
+		STA s_testerrors_parse
+		STX s_testerrors_parse+1
+		STY s_testerrors_parse+2
+
+		LDA .asm_errors
+		JSR byte_to_str
+		STA s_testerrors_asm
+		STX s_testerrors_asm+1
+		STY s_testerrors_asm+2
+
+		LDA #<s_testerrors	; Print number of errors
+		PHA
+		LDA #>s_testerrors
+		PHA
+		JSR puts
+
+.exit2		SEC			; Prevent newline
+		RTS
+
+
+.test_dis_asm
+;==============================================================================
+		LDX .rptr		; Load memory source pointer
+		STX .rbak
+		LDA .rptr+1
+		STA .rbak+1
+
+		JSR disassemble		; Print instruction to screen
+
+		STX .rptr		; Save pointer to following instruction
+		STA .rptr+1		; for next loop
+
+		LDA #<.strbuf		; Print disassembled instruction
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		CLC			; Clear rest of line
+		LDA #<s_space_40+10
+		ADC zp_crsr_col
+		PHA
+		LDA #>s_space_40+10
+		ADC # 0
+		PHA
+		JSR puts
+
+		JSR puts_newline
+		INC .lctr		; Count nr. printed lines
+;------------------------------------------------------------------------------
+		;  Copy and convert line from screen memory to buffer string
+
+		SEC
+		LDA puts_vptr
+		SBC # 40		; Go one row up
+		STA .sptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .sptr+1
+
+		SEC
+		LDA .sptr
+		SBC zp_crsr_col		; Go to line start
+		STA .sptr
+		LDA .sptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDY # 40		; Copy the whole line to buffer
+		LDA # 0
+		STA .strbuf,Y
+		DEY
+.copy		LDA (.sptr),Y		; Read char from screen memory
+		JSR screen_to_petscii
+		JSR to_lower_case
+		STA .strbuf,Y		; Store in string buffer
+		DEY
+		BPL .copy
+;------------------------------------------------------------------------------
+		; Add EOS marker after last non-space char
+!ifdef TEST_STRING {
+		LDY # 40
+.eos_loop	DEY
+		LDA .strbuf,Y
+		CMP #' '
+		BNE .eos_done
+		LDA # 0
+		STA .strbuf,Y
+		BEQ .eos_loop
+.eos_done
+}
+;------------------------------------------------------------------------------
+		; Convert text to machine code
+
+		LDX #<.strbuf		; Pass pointer to string buffer
+		LDA #>.strbuf
+
+		JSR assemble		; Convert to machine code
+
+		BCC .assemble_ok	; No error reported?
+;------------------------------------------------------------------------------
+		; Assembly error, mark offending character
+
+.assemble_error	TAX			; .A contains index to bad char
+		LDY zp_crsr_row
+		JSR goto_xy		; Position output cursor
+
+		LDA #.error_color	; Print red up-arrow
+		STA puts_color
+		LDA #petscii_uarr
+		JSR putc
+
+		LDA cramcolor_text	; Restore default color
+		STA puts_color
+		LDA #$0d		; Newline
+		JSR putc
+
+		INC .lctr		; Count nr. printed lines
+		INC .parse_errors	; Account for this error
+
+		RTS
+
+;------------------------------------------------------------------------------
+.assemble_ok	; Print result of re-assembly (address and machine code in hex)
+
+		LDA #.error_color	; Print in red, will be overwritten by
+		STA puts_color		; next line, if no error
+
+		LDA .rbak+1		; Address
+		JSR puts_hexbyte
+		LDA .rbak
+		JSR puts_hexbyte
+		LDA #' '
+		JSR putc
+
+.output_opc	LDA asm_opcode		; Opcode
+		JSR puts_hexbyte
+
+		LDA asm_ilen		; Check length of instruction
+		CMP # 1
+		BEQ .output_done
+
+.output_lo	LDA #' '		; Low byte
+		JSR putc
+		LDA asm_operand_lo
+		JSR puts_hexbyte
+
+		LDA asm_ilen		; Check length of instruction
+		CMP # 2
+		BEQ .output_done
+
+.output_hi	LDA #' '		; High byte
+		JSR putc
+		LDA asm_operand_hi
+		JSR puts_hexbyte
+
+.output_done	LDA #$0d		; Newline
+		JSR putc
+
+		LDA cramcolor_text	; Restore default color
+		STA puts_color
+;------------------------------------------------------------------------------
+		; Compare assembled hex values with disassembled values above
+
+		SEC			; Calculate pointer to line above
+		LDA puts_vptr
+		SBC # 40
+		STA .sptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .sptr+1
+
+		SEC			; Calculate pointer to 2 lines above
+		LDA puts_vptr
+		SBC # 80
+		STA .tptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .tptr+1
+
+		LDY # 11		; Compare left part (hex values) only
+.compare_loop	LDA (.sptr),Y
+		CMP (.tptr),Y
+		BNE .compare_false
+		DEY
+		BNE .compare_loop
+
+		LDA #petscii_up		; If equal, move up to save space on
+		JSR putc		; screen (overwriting assembled hex
+					; values)
+!ifdef OVERWRITE_GOOD {
+		LDA #<s_space_40
+		PHA
+		LDA #>s_space_40
+		PHA
+		JSR puts
+		LDA #petscii_up
+		JSR putc
+		JSR putc
+		DEC .lctr
+}
+		RTS
+
+.compare_false	INC .lctr		; Count nr. printed lines
+		INC .asm_errors
+		RTS
+
+
+; Self-test strings
+;==============================================================================
+s_selftest	!pet petscii_clr_home	;;13
+		!pet "self-test", 13
+		!pet "=========", 13
+		!pet 13, 0
+
+s_legal_opcodes
+		!pet "legal opcodes", 13
+		!pet "-------------", 13
+		!pet 0
+
+s_illegal_opcodes
+		!pet "                         ", 13
+		!pet "illegal opcodes", 13
+		!pet "---------------", 13
+		!pet 0
+
+s_press_any_key	!pet "press any key", 0
+
+s_testerrors	!pet "results", 13
+		!pet "-------", 13
+		!pet "tested opcodes:  "
+s_tested_opcs	!pet "000", 13
+		!pet " legal:          ", petscii_grey
+s_legal_opcs	!pet "000", pcolor_text, 13
+		!pet " illegal:        ", petscii_grey
+s_illegal_opcs	!pet "000", pcolor_text, 13
+		!pet "unusable ops:    012 (kil)", 13
+		!pet "duplicates:      024 (nop, sbc, anc)", 13
+		!pet "total:           "
+s_total_opcs	!pet "000", 13, 13
+		!pet "parse errors:    "
+s_testerrors_parse
+		!pet "000", 13
+		!pet "assembly errors: "
+s_testerrors_asm
+		!pet "000", 13
+		!pet 0
+
+
+;==============================================================================
+!zone TEST_PROGRAM
+;==============================================================================
+; Contains every possible opcode (sans illegal opcodes)
+; https://www.c64-wiki.de/wiki/%C3%9Cbersicht_6502-Assemblerbefehle
+; 28 NOPs: 1 real NOP ($ea) + 5 illegal (3 DOP, 2 TOP) = 22 unused NOPs
+; 12 KILs, 1 double ANC ($0b = $2b), 1 double SBC ($e9 = $eb)
+; 22 + 12 + 1 + 1 = 36 unused, 220 + 36 = 256, 0 missing instructions.
+
+
+legal_opcodes
+;------------------------------------------------------------------------------
+		LDA #$12
+		LDA $1234
+		LDA $1234,X
+		LDA $1234,Y
+		LDA $12
+		LDA $12,X
+		LDA ($12,X)
+		LDA ($12),Y
+
+		LDX #$12
+		LDX $1234
+		LDX $1234,Y
+		LDX $12
+		LDX $12,Y
+
+		LDY #$12
+		LDY $1234
+		LDY $1234,X
+		LDY $12
+		LDY $12,X
+
+		STA $1234
+		STA $1234,X
+		STA $1234,Y
+		STA $12
+		STA $12,X
+		STA ($12,X)
+		STA ($12),Y
+
+		STX $1234
+		STX $12
+		STX $12,Y
+
+		STY $1234
+		STY $12
+		STY $12,X
+
+		TAX
+		TAY
+		TXA
+		TYA
+		TSX
+		TXS
+
+		AND #$12
+		AND $1234
+		AND $1234,X
+		AND $1234,Y
+		AND $12
+		AND $12,X
+		AND ($12,X)
+		AND ($12),Y
+
+		ORA #$12
+		ORA $1234
+		ORA $1234,X
+		ORA $1234,Y
+		ORA $12
+		ORA $12,X
+		ORA ($12,X)
+		ORA ($12),Y
+
+		EOR #$12
+		EOR $1234
+		EOR $1234,X
+		EOR $1234,Y
+		EOR $12
+		EOR $12,X
+		EOR ($12,X)
+		EOR ($12),Y
+
+		ADC #$12
+		ADC $1234
+		ADC $1234,X
+		ADC $1234,Y
+		ADC $12
+		ADC $12,X
+		ADC ($12,X)
+		ADC ($12),Y
+
+		;!byte $eb, $12		; Same as $e9, $12 (SBC #)
+sub		SBC #$12
+		SBC $1234
+		SBC $1234,X
+		SBC $1234,Y
+		SBC $12
+		SBC $12,X
+		SBC ($12,X)
+		SBC ($12),Y
+
+		INC $1234
+		INC $1234,X
+		INC $12
+		INC $12,X
+
+		DEC $1234
+		DEC $1234,X
+		DEC $12
+		DEC $12,X
+
+		INX
+		INY
+		DEX
+		DEY
+
+		ASL
+		ASL $1234
+		ASL $1234,X
+		ASL $12
+		ASL $12,X
+
+		LSR
+		LSR $1234
+		LSR $1234,X
+		LSR $12
+		LSR $12,X
+
+		ROL
+		ROL $1234
+		ROL $1234,X
+		ROL $12
+		ROL $12,X
+
+		ROR
+		ROR $1234
+		ROR $1234,X
+		ROR $12
+		ROR $12,X
+
+		CMP #$12
+		CMP $1234
+		CMP $1234,X
+		CMP $1234,Y
+		CMP $12
+		CMP $12,X
+		CMP ($12,X)
+		CMP ($12),Y
+
+		CPX #$12
+		CPX $1234
+		CPX $12
+
+		CPY #$12
+		CPY $1234
+		CPY $12
+
+		BIT $1234
+		BIT $12
+
+		JMP $1234
+		JMP ($1234)
+
+		JSR $1234
+
+		RTS
+		RTI
+
+		BCC .target
+		BCS .target
+		BEQ .target
+.target		BNE .target
+		BPL .target
+		BMI .target
+		BVC .target
+		BVS .target
+
+		SEC
+		CLC
+		SEI
+		CLI
+		CLV
+		SED
+		CLD
+		PHA
+		PLA
+		PHP
+		PLP
+		NOP
+		BRK
+
+;------------------------------------------------------------------------------
+; *https://sourceforge.net/p/acme-crossass/code-0/HEAD/tree/trunk/docs/Illegals.txt
+; **https://www.c64-wiki.de/wiki/Opcode#Opcode-Matrix_der_CPU_MOS_6510
+
+illegal_opcodes	!byte $07, $12		; SLO $12
+		!byte $17, $12		; SLO $12,X
+		!byte $0f, $34, $12	; SLO $1234
+		!byte $1f, $34, $12	; SLO $1234,X
+		!byte $1b, $34, $12	; SLO $1234,Y
+		!byte $03, $12		; SLO ($12,X)
+		!byte $13, $12		; SLO ($12),Y
+
+		!byte $27, $12		; RLA $12
+		!byte $37, $12		; RLA $12,X
+		!byte $2f, $34, $12	; RLA $1234
+		!byte $3f, $34, $12	; RLA $1234,X
+		!byte $3b, $34, $12	; RLA $1234,Y
+		!byte $23, $12		; RLA ($12,X)
+		!byte $33, $12		; RLA ($12),Y
+
+		!byte $47, $12		; SRE $12
+		!byte $57, $12		; SRE $12,X
+		!byte $4f, $34, $12	; SRE $1234
+		!byte $5f, $34, $12	; SRE $1234,X
+		!byte $5b, $34, $12	; SRE $1234,Y
+		!byte $43, $12		; SRE ($12,X)
+		!byte $53, $12		; SRE ($12),Y
+
+		!byte $67, $12		; RRA $12
+		!byte $77, $12		; RRA $12,X
+		!byte $6f, $34, $12	; RRA $1234
+		!byte $7f, $34, $12	; RRA $1234,X
+		!byte $7b, $34, $12	; RRA $1234,Y
+		!byte $63, $12		; RRA ($12,X)
+		!byte $73, $12		; RRA ($12),Y
+
+		!byte $87, $12		; SAX $12	; See SBX imm
+		!byte $97, $12		; SAX $12,Y
+		!byte $8f, $34, $12	; SAX $1234
+		!byte $83, $12		; SAX ($12,X)
+
+		!byte $ab, $00		; LAX #$00	; LXA*
+		!byte $a7, $12		; LAX $12	; See LXA imm
+		!byte $b7, $12		; LAX $12,Y
+		!byte $af, $34, $12	; LAX $1234
+		!byte $bf, $34, $12	; LAX $1234,Y
+		!byte $a3, $12		; LAX ($12,X)
+		!byte $b3, $12		; LAX ($12),Y
+
+		!byte $c7, $12		; DCP $12
+		!byte $d7, $12		; DCP $12,X
+		!byte $cf, $34, $12	; DCP $1234
+		!byte $df, $34, $12	; DCP $1234,X
+		!byte $db, $34, $12	; DCP $1234,Y
+		!byte $c3, $12		; DCP ($12,X)
+		!byte $d3, $12		; DCP ($12),Y
+
+		!byte $e7, $12		; ISC $12
+		!byte $f7, $12		; ISC $12,X
+		!byte $ef, $34, $12	; ISC $1234
+		!byte $ff, $34, $12	; ISC $1234,X
+		!byte $fb, $34, $12	; ISC $1234,Y
+		!byte $e3, $12		; ISC ($12,X)
+		!byte $f3, $12		; ISC ($12),Y
+
+		!byte $bb, $34, $12	; LAS $1234,Y
+
+		!byte $9b, $34, $12	; TAS $1234,Y
+		!byte $9f, $34, $12	; SHA $1234,Y	; AHX**
+		!byte $93, $12		; SHA ($12),Y
+		!byte $9e, $34, $12	; SHX $1234,Y
+		!byte $9c, $34, $12	; SHY $1234,X
+
+		;!byte $0b, $12		; ANC #$12	; Identical to $2b
+		!byte $2b, $12		; ANC #$12	; Identical to $0b
+		!byte $4b, $12		; ASR #$12	; ALR*
+		!byte $6b, $12		; ARR #$12
+		!byte $cb, $12		; SBX #$12	; SAX*, AXS
+
+		!byte $80, $12		; DOP #$12
+		!byte $04, $12		; DOP $12
+		!byte $14, $12		; DOP $12,X
+		!byte $0c, $34, $12	; TOP $1234
+		!byte $1c, $34, $12	; TOP $1234,X
+
+		!byte $8b, $00		; ANE #$00	; XAA**
+
+opcodes_end
+
+
+;==============================================================================
+!eof

@@ -1,0 +1,286 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+;=============================================================================
+; HINTS
+;=============================================================================
+;		puts_*		petscii_*
+; Char		Screen Code	PETSCII
+; '0'-'9'	$30-$39	48-57
+; 'a'-'z'	$01-$1a	 1-26
+; 'A'-'Z'	$41-$5a	65-90
+;-----------------------------------------------------------------------------
+; call_get_key	Returns petscii_* values. !pet "stuff", !byte petscii_*
+; jsr_puts	Takes puts_* (also corresponding to !pet "xyz" !?) ;;
+; !pet "txt"	Works with lower case mode. Use puts_* values
+;=============================================================================
+
+
+	TRUE = -1
+	FALSE = 0
+
+
+; ROM VISBILITY CONFIGURAION
+;-----------------------------------------------------------------------------
+	; 2 - CHAREN (0=Character ROM instead of I/O area)
+	; 1 - HIRAM ($E000-$FFFF)
+	; 0 - LORAM ($A000-$BFFF)
+	; If HIRAM or LORAM is set, the I/O area is mapped to $D000-$DFFF.
+	; $0000 should always be set to $2F (%00101111)
+	;----------------------------------------------------------------------
+	; $01 value 	$A000-BFFF 	$D000-DFFF 	$E000-FFFF 	Notes
+	;----------------------------------------------------------------------
+	; $30 48 %000 	RAM 		RAM	 	RAM
+	; $31 49 %001 	RAM	 	CHARROM 	RAM
+	; $32 50 %010 	RAM 		CHARROM 	KERNAL
+	; $33 51 %011 	BASIC 		CHARROM 	KERNAL
+	; $34 52 %100 	RAM 		RAM	 	RAM
+	; $35 53 %101 	RAM 		I/O	 	RAM
+	; $36 54 %110 	RAM 		I/O	 	KERNAL
+	; $37 55 %111 	BASIC 		I/O	 	KERNAL		Default
+	;----------------------------------------------------------------------
+	ROM_MASK_RAM_RAM_RAM		= %000
+	ROM_MASK_RAM_CHAR_RAM		= %001
+	ROM_MASK_RAM_CHAR_KERNAL	= %010
+	ROM_MASK_BASIC_CHAR_KERNAL	= %011
+	;				  %100 is the same as %000
+	ROM_MASK_RAM_IO_RAM		= %101
+	ROM_MASK_RAM_IO_KERNAL		= %110
+	ROM_MASK_BASIC_IO_KERNAL	= %111
+
+
+; MEMORY ADDRESSES
+;-----------------------------------------------------------------------------
+
+	TAPE_BUFFER	= $033c		; 192 bytes "free" memory
+	TAPE_BUFFER_END	= $03fb
+
+	VRAM 		= $0400
+	VRAM_END	= VRAM+999
+
+	BASIC_START	= $0801
+
+	CRAM		= $d800
+	CRAM_END	= CRAM+999
+
+	VIC		= $d000
+	vic_frame_color		= $d020
+	vic_background_color	= $d021
+
+	SID		= $d400
+
+
+	cram_black	= $00
+	cram_white	= $01
+	cram_red	= $02
+	cram_cyan	= $03
+	cram_purple	= $04
+	cram_green	= $05
+	cram_blue	= $06
+	cram_yellow	= $07
+
+	cram_orange	= $08
+	cram_brown	= $09
+	cram_lred	= $0a
+	cram_dgrey	= $0b
+	cram_grey	= $0c
+	cram_lgreen	= $0d
+	cram_lblue	= $0e
+	cram_lgrey	= $0f
+
+
+; CONTROL CHARACTERS (PRINT, CHROUT=BSOUT to screen)
+;-----------------------------------------------------------------------------
+	petscii_toggle_case_off	= $08
+	petscii_toggle_case_on	= $09
+	petscii_lower_case	= $0e
+	petscii_upper_case	= $8e
+
+	petscii_newline	= $0d
+	petscii_uc_newline	= $8d
+	petscii_home		= $13
+	petscii_clr_home	= $93
+	petscii_ins	= $94
+	petscii_del	= $14
+
+	petscii_down	= $11
+	petscii_right	= $1d
+	petscii_up	= $91
+	petscii_left	= $9d
+
+	petscii_rvs_on	= $12
+	petscii_rvs_off	= $92
+
+	petscii_white	= $05
+	petscii_red	= $1c
+	petscii_green	= $1e
+	petscii_blue	= $1f
+	petscii_orange	= $81
+	petscii_black	= $90
+	petscii_brown	= $95
+	petscii_lred	= $96
+	petscii_dgrey	= $97
+	petscii_grey	= $98
+	petscii_lgreen	= $99
+	petscii_lblue	= $9a
+	petscii_lgrey	= $9b
+	petscii_purple	= $9c
+	petscii_yellow	= $9e
+	petscii_cyan	= $9f
+
+	petscii_f1	= $85
+	petscii_f3	= $86
+	petscii_f5	= $87
+	petscii_f7	= $88
+	petscii_f2	= $89
+	petscii_f4	= $8a
+	petscii_f6	= $8b
+	petscii_f8	= $8c
+
+	petscii_runstop	= $03
+
+
+; NAMED CHARACTERS
+;-----------------------------------------------------------------------------
+	petscii_uarr		= $5e
+	petscii_larr		= $5f
+	petscii_pi		= $de
+
+	petscii_line_hor	= $c0
+	petscii_line_ver	= $dd
+
+	petscii_corner_tl	= $b0
+	petscii_corner_tr	= $ae
+	petscii_corner_bl	= $ad
+	petscii_corner_br	= $bd
+
+	petscii_round_tl	= $75
+	petscii_round_tr	= $69
+	petscii_round_bl	= $6a
+	petscii_round_br	= $6b
+
+	vram_line_hor	= $40
+	vram_line_ver	= $5d
+
+	vram_corner_tl	= $70
+	vram_corner_tr	= $6e
+	vram_corner_bl	= $6d
+	vram_corner_br	= $7d
+
+	vram_round_tl	= $55
+	vram_round_tr	= $49
+	vram_round_bl	= $4a
+	vram_round_br	= $4b
+
+	petscii_heart		= $73
+	petscii_diamond		= $7a
+	petscii_club		= $78
+	petscii_spade		= $61
+
+	petscii_checkers	= $a6
+
+	vram_heart	= $53
+	vram_diamond	= $5a
+	vram_club	= $58
+	vram_spade	= $41
+
+	vram_checkers	= $66
+
+	petscii_thintop		= $a3
+	petscii_checkmark	= $ba
+
+	petscii_plus		= $2b
+	petscii_minus		= $2d
+
+!ifdef MENU_FATBARS {
+	petscii_upper_bar	= $b8
+	petscii_bottom_bar	= $b9
+	vram_upper_bar		= $78
+	vram_bottom_bar		= $79
+} else {
+	petscii_upper_bar	= $b9
+	petscii_bottom_bar	= $b8
+	vram_upper_bar		= $78
+	vram_bottom_bar		= $79	; Needs RVS
+}
+
+
+; KERNAL ROUTINES
+;-----------------------------------------------------------------------------
+	CLRSCR = $e544
+
+	ERROR  = $a437
+
+	CHKPRN = $ad8d		; ?Printer??
+	CHKCOM = $aefd		; Look for next comma in BASIC command
+	GETFLT = $ad8a		; Get float value from BASIC command
+	GETSTR = $ad9e  	; ?Get string: BIT $0D, BPL .error
+	GETINT = $b79e		; Byte to .X
+	TOWORD = $b7f7		; Transform float value to word in $14/$15
+
+	SCROLL = $e8ea
+
+	SETLFS = $ffba
+	SETNAM = $ffbd
+	OPEN   = $ffc0
+	CLOSE  = $ffc3
+	CHKIN  = $ffc6
+	CHKOUT = $ffc9
+	CLRCHN = $ffcc
+	CHRIN  = $ffcf
+	CHROUT = $ffd2		; BSOUT
+
+	TISTR  = $AF48		; Convert TI to String in $0100 hmmss
+
+
+; ZERO PAGE ADDRESSES used by TOOLBOX
+;-----------------------------------------------------------------------------
+; puts:		$3f-$41
+; fumble play:	$50-$51
+; fumble col_select: $c1-$c2
+
+
+; ZERO PAGE ADDRESSES
+;-----------------------------------------------------------------------------
+	zp_integer	= $14	; on goto/gosub, TOWORD result
+	zp_fac1		= $61	; $61..$66
+	zp_prg_end	= $ae	; $af Pointer to program end for LOAD/SAVE
+	zp_last_device	= $ba	; Disk, Printer, Keyboard, etc.
+	zp_crsr_col	= $d3	; Current cursor X-position, 0..39
+	zp_crsr_row	= $d6	; Current cursor Y-position, 0..24
+	zp_load_start	= $c1	; Start address for LOAD
+	zp_load_end	= $c3	; End address for LOAD
+	zp_kbdbuf_len	= $c6
+	zp_pressed_key	= $cb	; Currently pressed, none = $40
+	zp_cram_ptr	= $f3	; Pointer to current posision in CRAM
+
+	; Usable by ML programs
+	zp_temp_02	= $02	; Unused ZP byte
+	zp_temp_50	= $50	; Pointer for strings
+	zp_temp_51	= $51	; Pointer for strings
+	zp_temp_52	= $52	; Pointer for strings
+	zp_temp_ae	= $ae	; Pointer to program end for LOAD/SAVE
+	zp_temp_af	= $af	;
+	zp_temp_c1	= $c1	; Start address for LOAD
+	zp_temp_c3	= $c3	; End address for LOAD
+	zp_temp_f7	= $f7	; Pointer to RS232 input buffer
+	zp_temp_f8	= $f8	;
+	zp_temp_f9	= $f9	; Pointer to RS232 output buffer
+	zp_temp_fa	= $fa	;
+	zp_temp_fb	= $fb	; Free bytes for OS
+	zp_temp_fc	= $fc	;
+	zp_temp_fd	= $fd	;
+	zp_temp_fe	= $fe	;
+	zp_temp_ff	= $ff	; Does using this prevent easy RTS to BASIC?
+
+
+; EXTENDED ZP ADDRESSES
+;-----------------------------------------------------------------------------
+	zp_crsr_color	= $0286
+	zp_color_at_crsr = $0287
+
+
+;=============================================================================
+;EOF

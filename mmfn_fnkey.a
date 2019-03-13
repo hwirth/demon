@@ -1,0 +1,186 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef FUNCTION_KEYS {
+
+
+;==============================================================================
+!zone MMFN_CALL_FKEY
+;==============================================================================
+
+	.sptr = $f7
+
+mmfn_call_fkey
+;------------------------------------------------------------------------------
+		JSR goto_pos0
+
+		SEC
+		SBC #petscii_f1
+		;ROR
+		;BCC .skip_add
+		;ADC # 3
+.skip_add
+		ASL
+		ASL
+!if (USER_KEY_LENGTH >= 8)	{ ASL }
+!if (USER_KEY_LENGTH >= 16)	{ ASL }
+!if (USER_KEY_LENGTH >= 32)	{ ASL }
+
+		CLC
+		ADC #<s_key_functions
+		STA .sptr
+		LDA #>s_key_functions
+		ADC # 0
+		STA .sptr+1
+
+		LDY # 0
+		LDA (.sptr),Y
+		BEQ .done
+
+		LDA .sptr
+		PHA
+		LDA .sptr+1
+		PHA
+		JSR puts
+
+		LDA #' '
+		JSR putc
+		JSR putc
+		LDA #':'
+		JSR putc
+
+.done		CLC			; Prevent menu redraw
+		RTS
+
+
+;==============================================================================
+!zone ELFN_FUNCTION_KEY
+;==============================================================================
+
+	.sptr = $f7
+	.kptr = $f9
+	.key_number = $fb
+
+.error		JMP line_show_error
+
+elfn_function_key
+;------------------------------------------------------------------------------
+		SEC
+		LDA puts_vptr
+		SBC zp_crsr_col
+		STA .sptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDY # 1
+		LDA (.sptr),Y
+		CMP #' '
+		BEQ .list_keys
+		CMP #'1'
+		BCC .error
+		CMP #'9'
+		BCS .error
+;------------------------------------------------------------------------------
+		SEC
+		SBC #'1'		; Convert PETSCII number to byte
+
+		ASL
+		ASL
+!if (USER_KEY_LENGTH >= 8)	{ ASL }
+!if (USER_KEY_LENGTH >= 16)	{ ASL }
+!if (USER_KEY_LENGTH >= 32)	{ ASL }
+
+		CLC
+		ADC #<s_key_functions
+		STA .kptr
+		LDA #>s_key_functions
+		ADC # 0
+		STA .kptr+1
+;------------------------------------------------------------------------------
+		INY
+		LDA (.sptr),Y
+		CMP #' '
+		BNE .error
+
+		LDX # 1			; Count consecutive space chars
+
+		CLC			; Move .sptr so .Y can be used as index
+		LDA .sptr		; to both the command (new key content)
+		ADC # 3			; and .kptr (key value variable)
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+
+		LDY # 0			; Count the space after 'kN'
+.loop_read	LDA (.sptr),Y
+		CMP #' '
+		BNE .not_space
+		INX
+		BNE .cont
+.not_space	LDX # 0			; Reset space counter
+.cont		CPX # 2
+		BCS .finish
+		JSR screen_to_petscii
+		STA (.kptr),Y
+		INY
+		CPY #USER_KEY_LENGTH-1	; Maximum content length
+		BCC .loop_read
+
+.finish		LDA (.sptr),Y
+		CMP #' '
+		BNE .done
+		DEY
+.done		LDA # 0
+		STA (.kptr),Y
+
+		CLC			; Trigger newline
+		RTS
+
+;==============================================================================
+.list_keys	JSR goto_pos0
+
+		LDA #<s_key_functions
+		STA .sptr
+		LDA #>s_key_functions
+		STA .sptr+1
+
+		LDA #'1'		; Start with key 1
+.loop_list	STA .key_number
+
+		LDA #'k'		; Print set key command ("K1 CONTENT")
+		JSR putc
+		LDA .key_number
+		JSR putc
+		LDA #' '
+		JSR putc
+
+		LDA .sptr		; Print user defined value
+		PHA
+		LDA .sptr+1
+		PHA
+		JSR puts
+		JSR puts_newline
+
+		CLC			; Move pointer to next function entry
+		LDA .sptr
+		ADC #USER_KEY_LENGTH
+		STA .sptr
+		LDA .sptr+1
+		ADC # 0
+		STA .sptr+1
+
+		INC .key_number
+		LDA .key_number		; Check, if we just printed key 8
+		CMP #'9'
+		BNE .loop_list
+
+		SEC			; Prevent newline
+		RTS
+
+
+}
+;==============================================================================
+!eof

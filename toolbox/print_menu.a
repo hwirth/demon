@@ -1,0 +1,257 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+!ifdef TB_CLEAR_ROW {
+;=============================================================================
+!zone CLEAR_ROW
+;=============================================================================
+clear_row	LDA #<s_space_40
+		PHA
+		LDA #>s_space_40
+		PHA
+		LDX #$00
+		JSR puts_xy
+		RTS
+
+} ; TB_CLEAR_ROW
+
+
+!ifdef TB_EMPTY_TOP_ROW {
+;------------------------------------------------------------------------------
+!zone EMPTY_TOP_ROW
+;------------------------------------------------------------------------------
+empty_top_row	LDY #$28
+		LDA #' '
+.loop		STA $03ff,Y
+		DEY
+		BNE .loop
+		RTS
+
+} ; TB_EMPTY_TOP_ROW
+
+
+!ifdef TB_PRINT_MENU {
+;==============================================================================
+!zone PRINT_MENU
+;==============================================================================
+.scroll_mode	!byte 0
+
+	.s_tl = $f7
+	.s_bl = $f9
+	.s_tr = $fb
+	.s_br = $fd
+
+print_menu	PLA			; Save return address
+		TAX
+		PLA
+		TAY
+
+		LDA puts_scroll_mode
+		STA .scroll_mode
+		LDA #scroll_mode_none
+		STA puts_scroll_mode
+
+		PLA
+		STA .s_br+1
+		PLA
+		STA .s_br
+		PLA
+		STA .s_bl+1		; Exit function label
+		PLA
+		STA .s_bl
+		PLA			; Get parameters
+		STA .s_tr+1		; Menu caption (top row)
+		PLA
+		STA .s_tr
+		PLA
+		STA .s_tl+1		; Available keys (bottom row)
+		PLA
+		STA .s_tl
+
+		TYA			; Restore return address
+		PHA
+		TXA
+		PHA
+
+		LDA zp_crsr_col		; Back up cursor position
+		PHA
+		LDA zp_crsr_row
+		PHA
+
+;------------------------------------------------------------------------------
+		; Analyze menu strings, calculate height and raster line
+
+		LDA # 2
+		STA scroll_top
+		LDA # 22
+		STA scroll_bottom
+
+		LDY # 0
+		LDA (.s_bl),Y
+		CMP #petscii_up
+		BNE .skip_2line
+		DEC scroll_bottom
+!ifdef IRQ_MENU {
+		LDA #raster_2b
+		STA menu_raster+1
+}
+.skip_2line
+
+		LDA scroll_top
+		PHA
+		LDA # 0
+		PHA
+		LDA # 39
+		PHA
+		LDA scroll_bottom
+		PHA
+		JSR set_scroll_area
+;------------------------------------------------------------------------------
+		; Print empty inverted lines
+
+		LDX # 0
+		LDY # 0
+		JSR goto_xy
+
+		LDA cramcolor_frame
+		STA puts_color
+		JSR puts_rvs_on
+
+		LDY scroll_top
+		DEY
+		DEY
+		LDA #<s_space_40
+		PHA
+		LDA #>s_space_40
+		PHA
+.blank_top	JSR puts
+		DEY
+		BPL .blank_top
+;------------------------------------------------------------------------------
+		; Print menu bars (half line height graphical char)
+
+		LDA #<s_top_menu
+		PHA
+		LDA #>s_top_menu
+		PHA
+		JSR puts
+
+		LDY scroll_bottom
+		INY
+		LDX # 0
+		JSR goto_xy
+		LDA #<s_bottom_menu
+		PHA
+		LDA #>s_bottom_menu
+		PHA
+		JSR puts
+;------------------------------------------------------------------------------
+		; Print blank lines, reverse (menu text background)
+
+		JSR puts_rvs_on
+		SEC
+		LDA # 22
+		SBC scroll_bottom
+		TAY
+		LDA #<s_space_40
+		PHA
+		LDA #>s_space_40
+		PHA
+.blank_bottom	JSR puts
+		DEY
+		BPL .blank_bottom
+;------------------------------------------------------------------------------
+		; Print menu strings
+
+		LDA .s_tl		; Print top left (caption)
+		PHA
+		LDA .s_tl+1
+		PHA
+		LDX # 0
+		LDY # 0
+		JSR puts_xy
+
+		LDA .s_tr		; Print top right (version)
+		PHA
+		LDA .s_tr+1
+		PHA
+		LDX # 39
+		LDY # 0
+		JSR rputs_xy
+
+		LDA .s_bl		; Print bottom left (menu)
+		PHA
+		LDA .s_bl+1
+		PHA
+		LDX # 0
+		LDY # 24
+		JSR puts_xy
+
+		LDA .s_br		; Print bottom right (exit)
+		PHA
+		LDA .s_br+1
+		PHA
+		LDX # 39
+		LDY # 24
+		JSR rputs_xy
+;------------------------------------------------------------------------------
+		LDX scroll_left		; Go to "home" position
+		LDY scroll_top
+		JSR goto_xy
+
+		LDA cramcolor_text
+		STA puts_color
+
+		LDA .scroll_mode
+		STA puts_scroll_mode
+
+		PLA			; Restore cursor position
+		TAY
+		PLA
+		TAX
+		JSR goto_xy
+
+		RTS
+
+} ; TB_PRINT_MENU
+
+
+;=============================================================================
+!zone STRINGS
+;=============================================================================
+
+	.b = petscii_upper_bar
+	.u = petscii_bottom_bar
+
+
+!ifdef TB_S_TOP_MENU {
+s_top_menu	!pet petscii_rvs_off
+		!pet .u,.u,.u,.u,.u,.u,.u,.u,.u,.u
+		!pet .u,.u,.u,.u,.u,.u,.u,.u,.u,.u
+		!pet .u,.u,.u,.u,.u,.u,.u,.u,.u,.u
+		!pet .u,.u,.u,.u,.u,.u,.u,.u,.u,.u
+		!pet 0
+}
+
+
+!ifdef TB_S_BOTTOM_MENU {
+s_bottom_menu	!pet petscii_rvs_off
+		!pet .b,.b,.b,.b,.b,.b,.b,.b,.b,.b
+		!pet .b,.b,.b,.b,.b,.b,.b,.b,.b,.b
+		!pet .b,.b,.b,.b,.b,.b,.b,.b,.b,.b
+		!pet .b,.b,.b,.b,.b,.b,.b,.b,.b,.b
+		!pet 0
+}
+
+
+!ifdef TB_S_SPACE_40 {
+s_space_40	!pet "                                        "
+		!pet 0
+}
+
+
+;=============================================================================
+;EOF

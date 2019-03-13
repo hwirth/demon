@@ -1,0 +1,34 @@
+;=============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;=============================================================================
+
+; SYS_PARAMS
+;-----------------------------------------------------------------------------
+get_int		JSR $aefd		; CHKCOM
+		JSR $b79e		; GETINT
+		RTS
+
+
+get_word	PLA			; Save return address
+		STA $f7
+		PLA
+		STA $f8
+
+		JSR $aefd		; CHKCOM
+		JSR $ad8a		; GETFLT
+		JSR $b7f7		; TOWORD
+		LDA $15
+		PHA
+		LDA $14
+		PHA
+
+		LDA $f8			; Restore return address
+		PHA
+		LDA $f7
+		PHA
+		RTS
+
+
+;=============================================================================
+;EOF

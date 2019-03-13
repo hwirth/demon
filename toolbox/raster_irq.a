@@ -1,0 +1,271 @@
+;==============================================================================
+; TOOLBOX copy(l)eft 2018 by http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+	;IRQ_MENU = 1		; Use ISR to enhance the menu
+	;IRQ_HOOK = 1		; JSR irq_custom_handler
+
+
+;------------------------------------------------------------------------------
+;		JSR reset_sid		; Set all registers to zero
+;!ifdef DEFMON_TUNE {
+;		LDA #$00		; Init defMON tune
+;		JSR $1000
+;}
+;------------------------------------------------------------------------------
+
+
+
+;------------------------------------------------------------------------------
+!zone RASTER_IRQ_HELPERS
+;------------------------------------------------------------------------------
+
+!ifndef CUSTOM_RASTER_0 {
+	raster_0 = 46
+}
+	raster_1  = 61
+	raster_2  = 239
+	raster_2b = 231
+	raster_3  = 253
+
+orig_irq_vect	!byte $00, $00
+
+
+init_raster_isr
+;------------------------------------------------------------------------------
+		; Installs the raster line ISR
+		SEI
+
+		; Remember original IRQ vector
+		LDA $0314		; VIC_RASTER_VECT LO
+		LDX $0315		; VIC_RASTER_VECT HI
+		STA orig_irq_vect
+		STX orig_irq_vect+1
+
+		; Disable CIA-1 interrupts
+		LDA #%01111111		; Bit 8=0: Clear mask bits
+		STA $dc0d 		; CIA-1 Interrupt Control and Status
+		LDA $dc0d		; Clear INT DATA flags
+
+		; Enable raster IRQ
+		LDA #%00000001		; Select "ERST"
+		STA $d01a		; VIC Interrupt enable register
+
+		; Set interrupt vector to custom routine
+!ifdef IRQ_MENU {
+		LDA #<raster_isr1
+		LDX #>raster_isr1
+} else {
+		LDA #<minimal_isr
+		LDX #>minimal_isr
+}
+		STA $0314		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		; Set the raster line for the IRQ
+		LDA $d011		; VIC raster line, bit 8
+		AND #%01111111		; Clear bit 8, raster line is < 256
+		STA $d011		; VIC raster line, bit 8
+
+		LDA #raster_0		; Middle of the screen
+		STA $d012		; VIC raster line, bits 7 to 0
+
+		CLI
+		RTS
+
+
+exit_raster_isr
+;------------------------------------------------------------------------------
+		; Uninstalls the raster ISR
+		SEI
+
+		; Restore original IRQ vector
+		LDA orig_irq_vect
+		LDX orig_irq_vect+1
+		STA $0314		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		LDA #%10000000		; Select "IRQ"
+		STA $d01a		; VIC Interrupt enable register
+
+		; Restore CIA configuration
+		LDA #%10000011		; Bit 8=1: Set mask bits (Timer A+B enable)
+		STA $dc0d		; CIA-1 Interrupt Control and Status
+
+		LDA #$ff		; Clear VIC IRQ bit
+		STA $d019
+		LDA #$00
+		STA $d01a		; Clear interrupt mask
+
+		CLI
+		RTS
+
+
+
+!ifndef IRQ_MENU {
+;==============================================================================
+!zone MINIMAL_RASTER_ISR
+;==============================================================================
+
+minimal_isr
+!ifdef IRQ_PLAY DEC $d020
+
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+	!ifdef IRQ_HOOK {
+		JSR custom_irq_handler
+	}
+	!ifdef DEFMON_TUNE {
+		JSR $1003		; Advance song
+		JSR $1006		; Call 1x, 3x or 7x for multispeed tune
+	}
+
+		LDA cursor_count	; Prevent underflow, if main program
+		BEQ .skip_cursor	; is too busy to call getkey in time
+		DEC cursor_count	; and have the count down restarted
+.skip_cursor
+!ifdef DEBUG	DEC $d827
+
+!ifdef IRQ_PLAY INC $d020
+
+		LSR $d019		; Clear VIC IRQ bit
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		JMP (orig_irq_vect)
+		;JMP $ea31		; Jump to KERNAL ISR
+
+
+} else { ;  IRQ_MENU defined
+
+;==============================================================================
+!zone TOOLBOX_RASTER_ISR
+;==============================================================================
+
+.prev_uppercase	!byte 0
+
+raster_isr0	SEI
+		LDA #raster_1		; Middle of the screen
+		STA $d012		; VIC raster line, bits 7 to 0
+
+		LDA #<raster_isr1
+		LDX #>raster_isr1
+		STA $0314		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		LDA cramcolor_frame
+		STA $d020
+		STA $d021
+
+	!ifdef LOWER_CASE_MENU {
+		LDA $d018
+		STA .prev_uppercase
+		ORA #$02
+		STA $d018
+	}
+
+		DEC cursor_count
+
+		LSR $d019		; Clear VIC IRQ bit
+		CLI
+
+	!ifdef DEFMON_TUNE {
+		JSR $1003		; Advance song
+		JSR $1006		; Call 1x, 3x or 7x for multispeed tune
+	}
+		JMP $ea31		; Jump to KERNAL ISR
+
+
+;------------------------------------------------------------------------------
+raster_isr1	SEI
+menu_raster	LDA #raster_2		; Middle of the screen
+		STA $d012		; VIC raster line, bits 7 to 0
+
+		LDA #<raster_isr2
+		LDX #>raster_isr2
+		STA $0314 		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		LDA cramcolor_background
+		STA $d020
+		STA $d021
+
+	!ifdef LOWER_CASE_MENU {
+		LDA .prev_uppercase
+		AND #$02
+		EOR #$ff
+		AND $d018
+		STA $d018
+	}
+
+		LSR $d019		; Clear VIC IRQ bit
+		CLI
+		JMP $ea31 		; Jump to KERNAL ISR
+
+
+;------------------------------------------------------------------------------
+raster_isr2	SEI
+		LDA #raster_3		; Middle of the screen
+		STA $d012		; VIC raster line, bits 7 to 0
+
+		LDA #<raster_isr3
+		LDX #>raster_isr3
+		STA $0314		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		LDA cramcolor_frame
+		STA $d020
+		STA $d021
+
+	!ifdef LOWER_CASE_MENU {
+		LDA $d018
+		STA .prev_uppercase
+		ORA #$02
+		STA $d018
+	}
+
+		LSR $d019		; Clear VIC IRQ bit
+		CLI
+		JMP $ea31		; Jump to KERNAL ISR
+
+
+;------------------------------------------------------------------------------
+raster_isr3	SEI
+		LDA #raster_0		; Middle of the screen
+		STA $d012		; VIC raster line, bits 7 to 0
+
+		LDA #<raster_isr0
+		LDX #>raster_isr0
+		STA $0314		; VIC_RASTER_VECT LO
+		STX $0315		; VIC_RASTER_VECT HI
+
+		LDA cramcolor_frame_ext
+		STA $d020
+
+	!ifdef IRQ_HOOK {
+		JSR custom_irq_handler
+	}
+
+	!ifdef LOWER_CASE_MENU {
+		LDA .prev_uppercase
+		AND #$02
+		EOR #$ff
+		AND $d018
+		STA $d018
+	}
+
+		LSR $d019		; Clear VIC IRQ bit
+		CLI
+		JMP $ea31		; Jump to KERNAL ISR
+}
+
+;==============================================================================
+!eof

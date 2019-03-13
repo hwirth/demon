@@ -1,0 +1,570 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+; This file is about reading a line from screen after the user pressed return
+; and calling the according command handlers. Helper functions for retreiving
+; values of parameters for the  elfn_*  functions are also provided.
+
+
+;==============================================================================
+!zone EXTRACT_LINE_PARAMETERS
+;==============================================================================
+
+goto_first_space
+;------------------------------------------------------------------------------
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		JSR goto_pos0		; Get  puts_vptr  updated
+
+		LDY # -1		; Find first space character in line
+.loop		INY
+		LDA (puts_vptr),Y
+		CMP #' '
+		BNE .loop
+
+		TYA			; Position cursor on found space char
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+		RTS
+
+
+;==============================================================================
+!zone EXTRACT_LINE_PARAMETERS
+;==============================================================================
+
+	.temp	= $02
+	.strbuf = TAPE_BUFFER
+
+.is_hex_digit
+;------------------------------------------------------------------------------
+; IN:	.A	char	Screen code to be checked, if 0..9, a..f
+; OUT:	CARRY	Boolean	FALSE, if .A contains a digit
+
+		PHA
+		CMP #'0'
+		BCC .check_alpha
+		CMP #'9'+1
+		BCS .check_alpha
+.is_digit	PLA
+		CLC
+		RTS
+
+.check_alpha
+!convtab SCR {	CMP #'a' }
+		BCC .no_hex_digit
+!convtab SCR {	CMP #'f'+1 }
+		BCC .is_digit
+.no_hex_digit	PLA
+		SEC
+		RTS
+
+
+.is_dec_digit
+;------------------------------------------------------------------------------
+; IN:	.A	char	Screen code to be checked, if 0..9
+; OUT:	CARRY	Boolean	FALSE, if .A contains a decimal digit
+
+		PHA
+		CMP #'0'
+		BCC .no_dec_digit
+		CMP #'9'+1
+		BCS .no_dec_digit
+		PLA
+		AND #$0f		; Remove the high nibble 3
+		RTS
+
+.no_dec_digit	PLA
+		SEC
+		RTS
+
+
+.read_byte
+;------------------------------------------------------------------------------
+		LDA .strbuf,Y
+		JSR .is_hex_digit
+		BCS .exit_read_byte
+		JSR str_to_nibble
+		ASL
+		ASL
+		ASL
+		ASL
+		STA .temp
+		INY
+		LDA .strbuf,Y
+		JSR .is_hex_digit
+		BCS .exit_read_byte
+		JSR str_to_nibble
+		ORA .temp
+		INY
+
+		CLC			; Indicate read success
+.exit_read_byte	RTS
+
+
+line_expect_int8
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.A	int8	Value
+;	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if value found
+
+		JSR .read_byte
+		BCS .int8_error_0
+		PHA
+
+		LDA .strbuf,Y
+		BEQ .int8_success
+		CMP #' '
+		BEQ .int8_success
+		INY
+.int8_error_1	PLA
+.int8_error_0	SEC
+		RTS
+
+.int8_success	INY
+		PLA
+		CLC
+		RTS
+
+
+line_expect_int16
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.X/.A	int16	Value (lo/hi)
+;	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if value found
+
+		JSR .read_byte
+		BCS .int16_error_0
+		PHA
+		JSR .read_byte
+		BCS .int16_error_1
+		PHA
+
+		LDA .strbuf,Y
+		BEQ .int16_success
+		CMP #' '
+		BEQ .int16_success
+
+.int16_error_2	PLA
+.int16_error_1	PLA
+.int16_error_0	SEC
+		RTS
+
+.int16_success	INY
+		PLA
+		TAX
+		PLA
+		CLC
+		RTS
+
+
+line_expect_flags	; For register view
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.A	int8	Flags - Converted from '*' (true) and '.' (false)
+;	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if flags were successfully read in
+
+		LDA # 0
+		STA .temp
+		LDX # 8			; Look for 8 flags
+.flags_loop	LDA .strbuf,Y
+.check_star
+!convtab SCR {	CMP #'*' }
+		BNE .check_dot
+		SEC
+		BCS .add_bit		; Will always jump
+.check_dot
+!convtab SCR {	CMP #'.' }
+		BNE .flags_error
+		CLC
+.add_bit	ROL .temp
+		INY
+		DEX			; Stop after 8 bits
+		BNE .flags_loop
+
+		LDA .strbuf,Y
+		BEQ .flags_success
+		CMP #' '
+		BEQ .flags_success
+		INY
+.flags_error	SEC
+		RTS
+
+.flags_success	INY
+		LDA .temp		; Return (uint8)flags
+		CLC
+		RTS
+
+
+line_expect_dec
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.X/.A	int16	Value (lo/hi)
+;	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if value found
+
+		LDA .strbuf,Y
+		JSR .is_dec_digit
+		BCS .dec_error
+		TAX
+
+		LDA # 0
+		STA param_1
+		STA param_1+1
+
+.dec_loop	ASL param_1		; Multiply by 2
+		ROL param_1+1
+
+		LDA param_1		; Keep x2
+		STA param_2
+		LDA param_1+1
+		STA param_2+1
+
+		ASL param_1		; Multiply by 4 (x8 total)
+		ROL param_1+1
+		ASL param_1
+		ROL param_1+1
+
+		CLC			; Add x2 + x8 = x10
+		LDA param_1
+		ADC param_2
+		STA param_1
+		LDA param_1+1
+		ADC param_2+1
+		STA param_1+1
+
+		CLC
+		TXA
+		ADC param_1
+		STA param_1
+		LDA param_1+1
+		ADC # 0
+		STA param_1+1
+
+		BCS .dec_error		; Overflow, n > 65535
+
+		INY
+		CPY # 6			; NB: Offset+1 for the command '#'
+		BCS .dec_space		; No 6th digit allowed
+		LDA .strbuf,Y
+		BEQ .dec_done		; EOS? Return what we have so far
+		CMP #' '
+		BEQ .dec_done		; Space? Return what we have so far
+		JSR .is_dec_digit
+		TAX
+		BCC .dec_loop
+.dec_error	SEC
+		RTS
+
+.dec_space	JSR line_expect_empty
+		BCS .dec_error
+
+.dec_done	LDX param_1
+		LDA param_1+1
+		INY
+		CLC
+		RTS
+
+
+line_expect_quoted
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if two spaces were found
+
+		LDA .strbuf,Y
+!convtab SCR {	CMP #'"' }
+		BNE .quote_error
+		INY
+.loop_quote	LDA .strbuf,Y
+		BEQ .quote_error	; EOS?
+!convtab SCR {	CMP #'"' }
+		BEQ .quote_found
+		CPY # 39
+		BEQ .quote_error
+		INY
+		BNE .loop_quote		; Will always jump
+
+.quote_found	INY
+		CLC
+.quote_inc	RTS
+
+.quote_error	SEC
+		RTS
+
+
+line_expect_rest
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if two spaces were found
+
+		STY $02			; Found length (index to last char)
+
+.loop_rest	LDA .strbuf,Y
+		BEQ .rest_end		; EOS?
+		CMP #' '
+		BEQ .skip_restspace	; Space char? Don't count.
+		STY $02
+.skip_restspace	INY
+		BNE .loop_rest		; Will always jump
+
+.rest_end	CPY $02
+		BEQ .rest_error
+		LDY $02
+		LDA .strbuf,Y
+		CMP #' '
+		BEQ .rest_inc
+		INY
+.rest_inc	CLC
+		RTS
+
+.rest_error	SEC
+		RTS
+
+
+line_expect_word
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if two spaces were found
+
+		STY $02
+.loop_word	LDA .strbuf,Y
+		BEQ .word_end		; EOS?
+		CMP #' '
+		BEQ .word_end	; Space char? Don't count.
+		INY
+		BNE .loop_rest		; Will always jump
+
+.word_end	CPY $02
+		BEQ .word_error
+		CLC
+		RTS
+
+.word_error	SEC
+		RTS
+
+
+line_expect_empty
+;==============================================================================
+; IN:	.strbuf		Copy of line from VRAM, 40 chars
+;	.Y	int8	Index to first char to read
+; OUT:	.Y	int8	Index to next unread char
+;	CARRY	Boolean	FALSE if two spaces were found
+
+		LDA .strbuf,Y
+		CMP #' '
+		BNE .empty_error
+		INY
+		LDA .strbuf,Y
+		CMP #' '
+		BNE .empty_error
+		INY
+		CLC
+		RTS
+
+.empty_error	SEC
+		RTS
+
+
+;==============================================================================
+!zone LINE_SHOW_ERROR
+;==============================================================================
+
+line_show_error
+;------------------------------------------------------------------------------
+; Positions the cursor over the last char of the input line, that was parsed
+; successfully. Cursor color is set, too, but will be changed back immediatley
+; after the next key press by  menu_main .
+; IN:	.Y	int8	Cursor X-position
+
+		TYA
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+!ifdef USE_COLORS {
+		LDA cramcolor_error
+		STA puts_color
+}
+		SEC			; Prevent newline
+		RTS
+
+
+;==============================================================================
+!zone CALL_ELFN_SINGLE_PARAM
+;==============================================================================
+
+	.strbuf = TAPE_BUFFER
+
+call_elfn_single_param
+;------------------------------------------------------------------------------
+; Prepares the string buffer with a command and one parameter for calling a
+; elfn_* function from code.
+; IN:	.A	char	Monitor command
+;	.X/.Y	uint16	Parameter (lo/hi)
+;------------------------------------------------------------------------------
+
+		STA .strbuf		; Save command char
+
+		TXA			; Save low byte of parameter
+		PHA
+
+		TYA			; Get high byte of parameter
+		JSR byte_to_hex
+		JSR petscii_to_screen
+		STA .strbuf+1		; Save as hex value to string buffer
+		TXA
+		JSR petscii_to_screen
+		STA .strbuf+2
+
+		PLA			; Retreive low byte and save
+		JSR byte_to_hex
+		JSR petscii_to_screen
+		STA .strbuf+3
+		TXA
+		JSR petscii_to_screen
+		STA .strbuf+4
+
+		LDA #' '
+		STA .strbuf+5
+
+		LDA # 0			; Add EOS marker
+		STA .strbuf+6
+
+		RTS
+
+
+;==============================================================================
+!zone MMFN_EVAL_LINE
+;==============================================================================
+
+.function_table
+;------------------------------------------------------------------------------
+		!pet 'a',	<elfn_assemble,		>elfn_assemble
+		!pet '.',	<elfn_assemble,		>elfn_assemble
+		!pet 'b',	<elfn_bindump,		>elfn_bindump
+		!pet '%',	<elfn_bininput,		>elfn_bininput
+		!pet 'd',	<elfn_disassemble,	>elfn_disassemble
+		!pet 'f',	<elfn_fill,		>elfn_fill
+		!pet 'g',	<elfn_go,		>elfn_go
+!ifdef ILLEGAL_OPCODES {
+		!pet 'i',	<elfn_illegals,		>elfn_illegals
+}
+!ifdef FUNCTION_KEYS {
+		!pet 'k',	<elfn_function_key,	>elfn_function_key
+}
+		!pet 'l',	<elfn_load,		>elfn_load
+		!pet 'm',	<elfn_hexdump,		>elfn_hexdump
+		!pet ':',	<elfn_hexinput,		>elfn_hexinput
+		!pet 'r',	<elfn_registers,	>elfn_registers
+		!pet 's',	<elfn_save,		>elfn_save
+		!pet ';',	<elfn_registers,	>elfn_registers
+		!pet 't',	<elfn_transfer,		>elfn_transfer
+!ifdef RELOCATE {
+		!pet '+',	<elfn_assemble,		>elfn_assemble
+		!pet '-',	<elfn_assemble,		>elfn_assemble
+		!pet 'u',	<elfn_relocate,		>elfn_relocate
+		!pet 'w',	<elfn_workspace,	>elfn_workspace
+}
+!ifdef TB_PUTS_STRWORD {
+		!pet '#',	<elfn_to_hex,		>elfn_to_hex
+		!pet '$',	<elfn_to_dec,		>elfn_to_dec
+}
+!ifdef SYMBOLS {	!pet '*',	<elfn_symbol,		>elfn_symbol
+}
+		!pet '>',	<elfn_direct,		>elfn_direct
+!ifdef BROWSE_HELP {
+		!pet '?',	<elfn_help,		>elfn_help
+}
+		!pet ' ',	<.skip_newline,		>.skip_newline
+!ifdef SELF_TEST {
+		!pet 'e',	<self_test,		>self_test
+}
+		!pet 'x',	<mmfn_quit,		>mmfn_quit
+
+		!byte 0
+
+	.sptr = $f7
+	.strbuf = TAPE_BUFFER
+
+	.PLACEHOLDER = 0
+
+mmfn_eval_line
+;==============================================================================
+		SEC			; Load pointer to begin of line
+		LDA puts_vptr
+		SBC zp_crsr_col
+		STA .sptr
+		LDA puts_vptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDY # 39		; Copy current line to string buffer
+.copy_loop	LDA (.sptr),Y
+		STA .strbuf,Y
+		DEY
+		BPL .copy_loop
+
+;;!ifdef SYMBOLS	JSR symbol_to_address	; DOESNT WORK - NEEDS PETSCII
+
+		LDA .strbuf		; Search for the first character of the
+		JSR screen_to_petscii	;  .function_table
+		JSR to_lower_case
+		STA $02
+		LDY # 0
+.function_loop	LDA .function_table,Y
+		BEQ .function_unknown	; "Command" byte is zero? EOL.
+		CMP $02
+		BEQ .function_found
+		INY			; Select next entry
+		INY
+		INY
+		BNE .function_loop	; Will always jump
+.function_unknown
+		LDY # 0
+		JSR line_show_error
+		CLC			; Prevent menu redraw
+		RTS
+
+;------------------------------------------------------------------------------
+.function_found	STA el_command		; Save the command for the handler
+		INY
+		LDA .function_table,Y
+		STA .function_jsr+1
+		INY
+		LDA .function_table,Y
+		STA .function_jsr+2
+
+.function_jsr	JSR .PLACEHOLDER
+
+		BCS .skip_newline	; Set carry indicates error, no newline
+		JSR puts_newline
+.skip_newline	CLC			; Prevent menu redraw
+		RTS			; Return to main menu
+
+
+;==============================================================================
+!eof

@@ -1,0 +1,494 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone CHECK_RUN_STOP
+;==============================================================================
+
+check_run_stop
+;------------------------------------------------------------------------------
+		PHA
+
+		LDA $cb			; zp_pressed_key
+		CMP #$3f		; Run/Stop pressed?
+		BEQ .run_stop
+
+		PLA
+		CLC
+		RTS
+
+.run_stop	LDA # 0
+		STA $c6			; zp_kbdbuf_len
+
+		PLA
+		SEC			; Indicate R/S was detected
+		RTS
+
+
+;==============================================================================
+!zone MMFN_HOME
+;==============================================================================
+
+.goto_eol
+;------------------------------------------------------------------------------
+		JSR goto_pos0
+
+		LDY # 1
+.loop_right	LDA (puts_vptr),Y	; Find a ':' or EOL
+!convtab SCR {	CMP #':' }
+		BEQ .right_end
+		INY
+		CPY # 40
+		BNE .loop_right
+.right_end	DEY
+
+.loop_left	LDA (puts_vptr),Y
+		CMP #' '
+		BNE .found
+		DEY
+		BPL .loop_left
+
+.found		CPY # 0
+		BEQ .skip
+		INY
+.skip		TYA
+		TAX
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		RTS
+
+home_flag	!byte 0
+mmfn_home
+;==============================================================================
+; menu_main will reset  home_flag , when any key but the Home key is pressed
+
+		LDA zp_crsr_col		; Special case, if we start in col 0
+		BEQ .bol
+.eol		PHA			; If not in col 0, go to end of line
+		JSR .goto_eol
+		PLA
+		CMP zp_crsr_col		; EOL same as initial X-pos?
+		BNE .done		; No: we reached EOL as intended
+		LDA zp_crsr_col		; Are we at col 0?
+		BNE .pos0		; No: goto col 0
+		LDA home_flag		; Did we get to col 0 via Home?
+		BEQ .home		; No: empty line, go to real home
+.pos0		JSR goto_pos0		; Remember, that we went to col 0
+		LDA #$ff		; via Home
+		STA home_flag
+		CLC			; Prevent menu redraw
+		RTS
+
+.bol		LDA home_flag		; Did we get to col 0 by previously
+		BEQ .eol		; pressing Home?
+.home		JSR menu_home
+.done		CLC			; Prevent menu redraw
+		RTS
+
+
+!ifndef MIN_CODE_SIZE {
+;==============================================================================
+!zone MMFN_OUTPUT_SCREEN
+;==============================================================================
+
+mmfn_output_screen
+;------------------------------------------------------------------------------
+		JSR exit_raster_isr
+		JSR switch_to_client_context
+
+		JSR disable_cursor
+		JSR call_get_key
+		JSR enable_cursor
+
+		;JSR $f157		; INPUT CHAR
+
+		JSR switch_to_monitor_context
+		JSR init_raster_isr
+		CLC			; Prevent menu redraw
+		RTS
+}
+
+;==============================================================================
+!zone MMFN_QUIT
+;==============================================================================
+
+mmfn_quit
+;------------------------------------------------------------------------------
+!ifdef TOOLBOX_DIALOG {
+		LDA #<s_quit
+		PHA
+		LDA #>s_quit
+		PHA
+		JSR dialog_box
+		CPX #$0d		; Did user confirm by pressing RETURN?
+		BNE .exit		; Always jumps
+}
+.quit		JSR exit_menu_main	; Trigger main loop exiting
+
+.exit		CLC			; Prevent menu redraw
+		RTS
+
+
+;==============================================================================
+!zone SHOW_BOOT_MESSAGES
+;==============================================================================
+
+!ifdef SHOW_BOOT_MESSAGES {
+show_boot_mesages
+;------------------------------------------------------------------------------
+		LDA #<s_init_message
+		PHA
+		LDA #>s_init_message
+		PHA
+		JSR puts
+
+!if (opcode_gap <> 0) {
+		LDA #<s_init_gap
+		PHA
+		LDA #>s_init_gap
+		PHA
+		JSR puts
+		LDA #opcode_gap
+		JSR byte_to_str
+		JSR puts_strbyte
+}
+
+	!ifndef MIN_CODE_SIZE {
+		LDA #<s_init_free
+		PHA
+		LDA #>s_init_free
+		PHA
+		JSR puts
+
+		CLC
+		LDA #($e000 - heap) >> 10
+		JSR .show_kbytes
+
+		LDA #' '
+		JSR putc
+		LDA #'('
+		JSR putc
+
+		CLC
+		LDA #($a000 - heap) >> 10
+		JSR .show_kbytes
+		LDA #($d000 - $a000) >> 10
+		JSR .show_kbytes
+		LDA #($e000 - $d000) >> 10
+		JSR .show_kbytes
+
+		LDA #')'
+		JSR putc
+
+	    !ifdef WORKSPACE {
+		LDA #<s_init_ws
+		PHA
+		LDA #>s_init_ws
+		PHA
+		JSR puts
+
+		LDA workspace_start+1
+		JSR puts_hexbyte
+		LDA workspace_start
+		JSR puts_hexbyte
+
+		LDA #'-'
+		JSR putc
+
+		LDA workspace_end+1
+		JSR puts_hexbyte
+		LDA workspace_end
+		JSR puts_hexbyte
+	    }
+	    !ifdef DEBUG_SYS_STATE {
+		JSR debug_sys_state
+	    }
+	    !ifdef DEBUG_FILESIZES {
+		JSR puts_newline
+		JSR debug_filesizes
+	    }
+	} ; MIN_CODE_SIZE
+;------------------------------------------------------------------------------
+		JSR puts_newline
+		RTS
+
+	!ifndef MIN_CODE_SIZE {
+.show_kbytes
+;------------------------------------------------------------------------------
+		BCC .skip_plus
+		TAY
+		LDA #'+'
+		JSR putc
+		TYA
+.skip_plus	JSR byte_to_str
+		JSR puts_strbyte
+		LDA #'k'
+		JSR putc
+		SEC
+		RTS
+
+	} ; MIN_CODE_SIZE
+} ; SHOW_BOOT_MESSAGES
+
+
+;==============================================================================
+!zone MENU_MAIN
+;==============================================================================
+
+first_run	!byte $ff
+
+	.strbuf = TAPE_BUFFER
+
+print_main_menu
+;------------------------------------------------------------------------------
+!ifdef TOOLBOX_PRINT_MENU {
+		LDA #<s_mt_main
+		PHA
+		LDA #>s_mt_main
+		PHA
+		LDA #<s_version
+		PHA
+		LDA #>s_version
+		PHA
+		LDA #<s_mb_main
+		PHA
+		LDA #>s_mb_main
+		PHA
+		LDA #<s_mx_main
+		PHA
+		LDA #>s_mx_main
+		PHA
+		JSR print_menu
+
+		RTS
+}
+
+.show_menu
+;------------------------------------------------------------------------------
+!ifdef TOOLBOX_PRINT_MENU {
+		JSR print_main_menu
+}
+		JSR enable_cursor
+
+		LDA first_run
+		BEQ .skip_first
+
+		LDA #$ff
+		STA first_run
+
+!ifdef TUI_MENU {
+		JSR menu_home
+}
+!ifdef SHOW_BOOT_MESSAGES {
+		JSR show_boot_mesages
+}
+;------------------------------------------------------------------------------
+		JSR puts_newline
+		JSR show_registers	; Show CPU status
+
+		JSR puts_newline
+;------------------------------------------------------------------------------
+.skip_first	RTS
+
+
+.function_table
+;------------------------------------------------------------------------------
+	!byte petscii_newline,	<mmfn_eval_line,	>mmfn_eval_line
+!ifdef SCROLL_CONTINUE {
+	!byte petscii_up,  	<mmfn_crsr_up,		>mmfn_crsr_up
+	!byte petscii_down,	<mmfn_crsr_down,	>mmfn_crsr_down
+}
+	!byte petscii_home,	<mmfn_home,		>mmfn_home
+!ifdef FUNCTION_KEYS {
+	!byte petscii_f1,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f2,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f3,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f4,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f5,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f6,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f7,	<mmfn_call_fkey,	>mmfn_call_fkey
+	!byte petscii_f8,	<mmfn_call_fkey,	>mmfn_call_fkey
+}
+!ifndef MIN_CODE_SIZE {
+	!byte petscii_uarr,	<mmfn_output_screen,	>mmfn_output_screen
+}
+!ifdef TUI_MENU {
+	!byte petscii_larr,	<mmfn_quit,		>mmfn_quit
+	!byte petscii_runstop,	<mmfn_quit,		>mmfn_quit
+}
+!ifdef TEST_FUNCTION {
+	!byte $a6, 		<debug_test, 		>debug_test
+}
+.tend		!byte 0
+
+.allowed_keys	!byte 0
+!ifdef KEEP_COLOR {
+.prev_color	!byte 0
+}
+
+.pressed_key	!byte 0
+.quit_flag	!byte 0		; We stay in the main loop, until this is not 0
+
+	.PLACEHOLDER = 0
+
+exit_menu_main
+;------------------------------------------------------------------------------
+		LDA #$ff
+		STA .quit_flag
+.exit_menu	RTS
+
+main
+menu_main			; Main program entry point, also main menu
+;------------------------------------------------------------------------------
+		LDA #screenid_main_menu
+		STA current_screen
+!ifdef KEEP_COLOR {
+	LDA cramcolor_text
+	STA .prev_color
+}
+!if (0) {
+		LDA #01			; Indicate first call to draw page
+		STA .quit_flag
+.loop_menu	JSR .show_menu
+		LDA .quit_flag
+		CMP #$01
+		BNE .loop_getkey	; Not the first time here?
+		JSR ctfn_alpha		; Print table (F1)
+		DEC .quit_flag		; Set flag to 0
+}
+		LDA #00
+		STA .quit_flag
+.loop_menu	JSR .show_menu
+
+.loop_getkey	LDA .quit_flag
+		BNE .exit_menu
+
+		JSR call_get_key
+		STX .pressed_key
+!ifdef USE_COLORS {
+	!ifdef KEEP_COLOR {
+		LDA .prev_color		; Restore default color after error
+	} else {
+		LDA cramcolor_text
+	}
+	STA puts_color
+}
+	CPX #petscii_home
+	BEQ .skip_home_reset
+	LDA # 0
+	STA home_flag
+.skip_home_reset
+
+		LDY #$00		; See, if user pressed a function key
+.next_function	CPY #(.tend - .function_table)	; EOL?
+		BEQ .fn_undefined	; Check list of allowed keys
+		LDA .function_table,Y	; Load key
+		INY			; Skip the key in the list
+		CMP .pressed_key
+		BEQ .found_function
+		INY			; Skip pointer to function
+		INY
+		BNE .next_function
+
+.found_function	LDA .function_table,Y	; Adjust palceholder
+		STA .function_jump+1
+		LDA .function_table+1,Y
+		STA .function_jump+2
+		LDA .function_table-1,Y	; Pass over the command key
+.function_jump	JSR .PLACEHOLDER	; Placeholder for jump target
+		BCS .refresh_screen
+		JMP .loop_getkey
+.refresh_screen	JMP .loop_menu
+
+;------------------------------------------------------------------------------
+.fn_undefined
+!if (0) {
+		LDY #$ff
+.next_allowed	INY			; Select next char in list
+		LDA .allowed_keys,Y
+		BEQ .key_undefined	; EOL?
+		CMP .pressed_key
+		BNE .next_allowed	; Not yet found?
+}
+.found_allowed	LDA .pressed_key
+		JSR putc		; Custom reaction to allowed key
+!ifdef USE_COLORS {
+	!ifdef KEEP_COLOR {
+		LDA puts_color
+		STA .prev_color
+	}
+}
+		JMP .loop_getkey
+!if (0) {
+.key_undefined	JSR beep_error
+		JMP .loop_getkey
+}
+
+;==============================================================================
+!zone MENU_MAIN_STRINGS
+;==============================================================================
+!ifdef IRQ_MENU {
+	.m = color_background
+	.a = color_menu_active
+	.d = color_menu_disabled
+	.t = color_text
+
+	.n = petscii_rvs_off
+	.f = petscii_rvs_on
+} else {
+	.m = color_frame
+	.a = color_menu_active
+	.d = color_menu_disabled
+	.t = color_text
+
+	.f = petscii_rvs_off
+	.n = petscii_rvs_on
+}
+
+!ifdef TOOLBOX_PRINT_MENU {
+s_mt_main	!pet .m, .n, "demon                                   ", .f, 0
+
+s_mb_main
+!ifdef SELF_TEST {
+		!pet .a, .f, "e", .m, .n, "selftest ", .f
+}
+!if (0) {
+		!pet petscii_up
+}
+		!pet .a, .f, petscii_uarr, .m, .n, "screen"
+!if (0) {
+		!pet .a, .f, "up", .m, .n, "/"
+		!pet .a, .f, "dn", .m, .n, " "
+		!pet .a, .f, "f1", .m, .n, "start"
+		!pet .a, .f, "f3", .m, .n, "cont "
+		!pet .a, .f, "f5", .m, .n, "zoom "
+		!pet .a, .f, "f7", .m, .n, "hidemenu"
+		!pet 13
+		!pet .a, .f, $5f, $bd, .m, .n, "ed  "
+		!pet .a, .f, "f2", .m, .n, "save "
+		!pet .a, .f, "f4", .m, .n, "load "
+		!pet .a, .f, "f6", .m, .n, "stat "
+		!pet .a, .f, "f8", .m, .n, "reset"
+}
+		!pet 0
+
+s_mx_main	!pet .a, .f, $5f, .m, .n, "exit", .f, 0
+}
+;------------------------------------------------------------------------------
+!ifdef TOOLBOX_DIALOG {
+s_quit		!pet .a
+		!pet "    exit to basic?", 13
+		!pet "----------------------", 13
+		;!pet "all changes will be lost!", 13
+		!pet "press ", .f, .t, $5f, $bd, .n, .a
+		!pet " to confirm or", 13
+		!pet "any other key to stay."
+		!pet 0
+}
+
+;==============================================================================
+!eof

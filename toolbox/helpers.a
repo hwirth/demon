@@ -1,0 +1,754 @@
+;==============================================================================
+; TOOLBOX - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; Variables
+;------------------------------------------------------------------------------
+
+; Beep
+;------------------------------------------------------------------------------
+	beepfrq_init1	= $20
+	beeplen_init1	= $20
+	beepfrq_init2	= $60
+	beeplen_init2	= $10
+
+	beepfrq_err	= $06
+	beeplen_err	= $20
+
+	beepfrq_kbd	= $40
+	beeplen_kbd	= $02
+
+
+!ifdef TB_SAVE_RESTORE_ZP {
+;=============================================================================
+!zone SAVE_RESTORE_ZP_POINTERS
+;=============================================================================
+.raddr		!byte 0,0
+.temp_a		!byte 0
+.temp_y		!byte 0
+
+save_zp_pointers
+;-----------------------------------------------------------------------------
+		STA .temp_a
+		STY .temp_y
+
+		PLA
+		STA .raddr
+		PLA
+		STA .raddr+1
+
+		LDY #$00		; Back up $f7-$ff
+.loop_save	LDA $f7,Y
+		PHA
+		INY
+		CPY #$09		; Stop at $ff
+		BNE .loop_save
+
+		LDA .raddr+1
+		PHA
+		LDA .raddr
+		PHA
+
+		LDA .temp_a
+		LDY .temp_y
+
+		RTS
+
+
+restore_zp_pointers
+;-----------------------------------------------------------------------------
+		STA .temp_a
+		STY .temp_y
+
+		PLA
+		STA .raddr
+		PLA
+		STA .raddr+1
+
+		LDY #$08		; Restore $f7-$ff
+.loop_restore	PLA
+		STA $f7,Y
+		DEY
+		BPL .loop_restore
+
+		LDA .raddr+1
+		PHA
+		LDA .raddr
+		PHA
+
+		LDA .temp_a
+		LDY .temp_y
+
+		RTS
+
+} ; TB_SAVE_RESTORE_ZP
+
+
+!ifdef TB_SLEEP {
+;==============================================================================
+!zone SLEEP
+; IN:	.X	Number of loops to waste
+;==============================================================================
+sleep		PHA
+		TYA
+		PHA
+
+		CPX #$00
+		BEQ .done
+
+.loop_x		LDY #$00
+.loop_y		DEY
+		BNE .loop_y
+		LDA #$00
+.loop_a		CLC
+		ADC #$01
+		BNE .loop_a
+		DEX
+		BNE .loop_x
+
+.done		PLA
+		TAY
+		PLA
+		RTS
+
+} ; TB_SLEEP
+
+
+!ifdef TB_SID_BEEP {
+;==============================================================================
+!zone SID
+;==============================================================================
+reset_sid	LDY #$18
+		LDA #$00
+.loop		STA SID-1,Y
+		DEY
+		BNE .loop
+		RTS
+
+
+;------------------------------------------------------------------------------
+configure_sid_beep
+		;LDA #$40
+			STA SID+1
+		LDA #$00
+			STA SID
+		LDA #$40
+			STA SID+4
+		LDA #$00;;1a
+			STA SID+5
+		LDA #$f0;;80
+			STA SID+6
+		LDA #$0f
+			STA SID+24		; SID max volume
+
+		RTS
+
+;------------------------------------------------------------------------------
+	.beep_delay	= $01
+
+beep
+		JSR configure_sid_beep
+
+		LDA #$11
+		STA SID+4
+		;LDX #.beep_delay		; Given by caller
+		JSR sleep
+		LDA #$10
+		STA SID+4
+		RTS
+
+beep_error	LDA #beepfrq_err
+		LDX #beeplen_err
+		JSR beep
+		RTS
+
+beep_abort	LDA #beepfrq_init2
+		LDX #beeplen_init2
+		JSR beep
+		LDA #beepfrq_init1
+		LDX #beeplen_init1
+		JSR beep
+		RTS
+
+beep_success	LDA #beepfrq_init1
+		LDX #beeplen_init1
+		JSR beep
+		LDA #beepfrq_init2
+		LDX #beeplen_init2
+		JSR beep
+		RTS
+
+} ; TB_SID_BEEP
+!ifndef TB_SID_BEEP {
+beep_error
+beep_abort
+beep_success	RTS
+}
+
+
+!ifdef TB_VSYNC {
+;==============================================================================
+!zone VSYNC
+;==============================================================================
+vsync
+.vsync_loop1	LDA $d012		; Wait for raster line bits 7-0 = 0
+		BNE .vsync_loop1
+.vsync_loop2	LDA $d011		; Wait for bit 8 to become 0 too
+		AND #$80
+		BEQ .vsync_loop2
+		RTS
+
+} ; TB_VSYNC
+
+
+!ifdef TB_LO_HI_NIBBLES {
+;==============================================================================
+!zone LO_HI_NIBBLES
+; IN:	.A	uint8_t
+; OUT:	.A	char	Screen code '0'-'9', 'A'-'F'
+;==============================================================================
+hi_nibble	LSR
+		LSR
+		LSR
+		LSR
+lo_nibble	AND #$0f
+		CMP #$0a
+		BCC .numeric
+.alpha		;CLC			; Saving one byte
+		ADC #$36		; instead of adding $37
+		;;SBC # 10
+		RTS
+.numeric	ADC #$30
+		RTS
+
+
+;------------------------------------------------------------------------------
+!zone STR_TO_NIBBLE
+; IN:	.A	Screen codes '0'-'9', 'a'-'f', 'A'-'F'
+; OUT:	.A	uint4_t
+;------------------------------------------------------------------------------
+str_to_nibble	AND #$7f
+		CMP #$41
+		BCC .convert
+		SEC
+		SBC #$37
+		RTS
+.convert	CMP #$30
+		BCS .num
+.alpha		ADC #$09
+		RTS
+.num		SBC #$30
+		RTS
+
+} ; TB_LO_HI_NIBBLES
+
+
+!ifdef TB_BYTE_TO_HEX {
+;------------------------------------------------------------------------------
+!zone BYTE_TO_HEX
+; IN:	.A	uint8_t
+; OUT:	.X	char	Lower nibble	Screen code
+;	.A	char	High nibble	'0'-'9', 'A'-'F'
+;------------------------------------------------------------------------------
+byte_to_hex	PHA
+		JSR lo_nibble
+		TAX
+		PLA
+		JSR hi_nibble
+		RTS
+
+} ; TB_BYTE_TO_HEX
+
+
+!ifdef TB_BYTE_TO_STR {
+;------------------------------------------------------------------------------
+!zone BYTE_TO_STR
+; IN:	.A	uint8_t
+; OUT:	.A	char	Hundreds	Screen code and PETSCII are the same
+;	.X	char	Tens		for numbers
+;	.Y	char	Units
+;------------------------------------------------------------------------------
+.raddr		!byte 0,0
+
+byte_to_str	TAX			; Save input value
+
+		PLA			; Save return address
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		TXA			; Restore input value
+		LDX #$00		; Counts how often we can subtract 10
+		SEC
+.div10		CMP # 10		; Can we subtract another 10?
+		BCC .tens		; No, already below 10
+		SBC # 10
+		INX			; .X=tens (may get up to 25)
+		BNE .div10		; Always jumps
+
+.tens		TAY			; .X=tens+hundreds, .Y=units
+		TXA
+		CMP # 10		; n >= 100?
+		BCS .x100_to_255
+		LDA # 0			; .A=0, .X=tens, .Y=units
+		BEQ .to_str		; Done, output result
+
+.x100_to_255	CMP # 20		; n >= 200?
+		BCS .x200_to_255
+		SEC			; n was 100-199
+		SBC # 10		; Remove 100
+		TAX
+		LDA # 1			; .A=1, .X=tens, .Y=units
+		BNE .to_str		; Done, output result
+
+.x200_to_255	SEC			; n was 200-255
+		SBC # 20		; Remove 200
+		TAX
+		LDA # 2			; .A=2, .X=tens, .Y=units
+
+.to_str		CLC			; Convert numbers to chars
+		ADC #$30		; by adding $30 to the values
+		STA $02
+		TXA
+		CLC
+		ADC #$30
+		TAX
+		TYA
+		CLC
+		ADC #$30
+		TAY
+
+		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+
+		LDA $02			; Return hundreds
+		RTS
+
+} ; TB_BYTE_TO_STR
+
+
+!ifdef TB_WORD_TO_STR {
+;------------------------------------------------------------------------------
+!zone WORD_TO_STR
+; IN:	.X	uint8_t	Lo byte
+;	.A	uint8_t Hi byte
+; OUT:	STACK	5 chars, MSD pushed last. Leading zeroes are returned as $00
+;------------------------------------------------------------------------------
+.raddr		!byte 0,0
+.input		!byte 0,0,0
+.leading0	!byte 0
+.ret		!pet 0,0,0,0,0
+
+word_to_str	STX .input
+		STA .input+1
+		LDA # 0
+		STA .input+2
+
+		PLA
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		LDA #$ff
+		STA .leading0
+
+		LDX #$ff		; Count, how often we can subtract
+.loop10k	INX
+		SEC
+		LDA .input
+		SBC #< 10000
+		STA .input
+		LDA .input+1
+		SBC #> 10000
+		STA .input+1
+		LDA .input+2
+		SBC # 0
+		STA .input+2
+		BPL .loop10k
+
+		STX .ret
+		CLC			; Get positive again
+		LDA .input
+		ADC #< 10000
+		STA .input
+		LDA .input+1
+		ADC #> 10000
+		STA .input+1
+		LDA .input+2
+		ADC # 0
+		STA .input+2
+
+		LDX #$ff		; Count, how often we can subtract
+.loop1k		INX
+		SEC
+		LDA .input
+		SBC #< 1000
+		STA .input
+		LDA .input+1
+		SBC #> 1000
+		STA .input+1
+		LDA .input+2
+		SBC # 0
+		STA .input+2
+		BPL .loop1k
+
+		STX .ret+1
+		CLC			; Get positive again
+		LDA .input
+		ADC #< 1000
+		STA .input
+		LDA .input+1
+		ADC #> 1000
+		STA .input+1
+		LDA .input+2
+		ADC # 0
+		STA .input+2
+
+		LDX #$ff		; Count, how often we can subtract
+.loop100	INX
+		SEC
+		LDA .input
+		SBC #< 100
+		STA .input
+		LDA .input+1
+		SBC #> 100
+		STA .input+1
+		LDA .input+2
+		SBC # 0
+		STA .input+2
+		BPL .loop100
+
+		STX .ret+2
+		CLC			; Get positive again
+		LDA .input
+		ADC #< 100
+		STA .input
+		LDA .input+1
+		ADC #> 100
+		STA .input+1
+		LDA .input+2
+		ADC # 0
+		STA .input+2
+
+		LDX #$ff		; Count, how often we can subtract
+.loop10		INX
+		SEC
+		LDA .input
+		SBC #< 10
+		STA .input
+		LDA .input+1
+		SBC #> 10
+		STA .input+1
+		LDA .input+2
+		SBC # 0
+		STA .input+2
+		BPL .loop10
+
+		STX .ret+3
+.units		CLC			; Get positive again
+		LDA .input
+		ADC #< 10
+		STA .ret+4
+
+
+		LDY #$04
+.convert	CLC			; Convert to chars
+		LDA .ret,Y
+		ADC #$30
+		STA .ret,Y
+		DEY
+		BPL .convert
+
+		LDY #$00
+.remove		LDA .ret,Y		; Nihilate leading zeroes
+		CMP #$30
+		BNE .done
+		LDA #$00
+		STA .ret,Y
+		INY
+		CPY #$04
+		BNE .remove
+
+.done		LDY #$04
+.retval		LDA .ret,Y
+		PHA
+		DEY
+		BPL .retval
+
+		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+		RTS
+
+} ; TB_WORD_TO_STR
+
+
+!ifdef TB_PETSCII_SCREEN_CONV {
+;==============================================================================
+!zone PETSCII_SCREEN_CONVERSION
+;==============================================================================
+petscii_to_screen
+		STY $02
+		PHA
+		CMP #$ff
+		BNE .skip_ff
+		PLA
+		LDA #$5e
+		BNE .exit		; Will always jump
+
+.skip_ff	AND #$E0
+		TAY
+		PLA
+		CPY #$00
+		BEQ .add_80
+		CPY #$40
+		BEQ .sub_40
+		CPY #$60
+		BEQ .sub_20
+		CPY #$80
+		BEQ .add_40
+		CPY #$a0
+		BEQ .sub_40
+		CPY #$c0
+		BEQ .sub_80
+		CPY #$e0
+		BEQ .sub_80
+.exit		LDY $02
+		RTS
+
+.add_80		CLC
+		ADC #$80
+		BCC .exit
+.add_40		CLC
+		ADC #$40
+		BCC .exit
+.sub_20		SEC
+		SBC #$20
+		BCS .exit
+.sub_40		SEC
+		SBC #$40
+		BCS .exit
+.sub_80		SEC
+		SBC #$80
+		BCS .exit
+
+screen_to_petscii
+		STY $02
+		PHA
+		AND #$E0
+		TAY
+		PLA
+		CPY #$00
+		BEQ .add_40
+		CPY #$40
+		BEQ .add_80
+		CPY #$60
+		BEQ .add_40
+		CPY #$80
+		BEQ .sub_80
+		CPY #$a0
+		BEQ .sub_40
+		CPY #$c0
+		BEQ .sub_40
+		BNE .exit
+
+} ; TB_PETSCII_SCREEN_CONV
+
+
+!ifdef TB_TO_UPPER_LOWER_CASE {
+;==============================================================================
+!zone TO_UPPER_LOWER_CASE
+; IN:	.A	char	Converts PETSCII char to upper/lower case
+; OUT:	.A	char
+;==============================================================================
+to_upper_case	CMP #'A'		; Lower case 'a'
+		BCC .exit
+		CMP #'Z'+1
+		BCS .exit
+		ORA #$80
+.exit		RTS
+
+
+to_lower_case	CMP #'A'+128		; Upper case 'a'
+		BCC .exit
+		CMP #'Z'+1+128
+		BCS .exit
+		AND #$7f
+		RTS
+
+} ; TB_TO_UPPER_LOWER_CASE
+
+
+
+!ifdef TB_GET_VISUAL_STRLEN {
+;==============================================================================
+!zone GET_VISUAL_STRLEN
+;==============================================================================
+
+	.sptr = $f7
+
+get_visual_strlen
+;------------------------------------------------------------------------------
+; IN:	.X/.A	int16	Pointer to string
+; OUT:	.A	int8	Number of printable chars
+
+		LDA .sptr
+		PHA
+		LDA .sptr+1
+		PHA
+
+		STX .sptr		; Get pointer to string
+		STA .sptr+1
+
+		LDY # 0
+		LDX # 0			; Visible char counter
+.loop_count	LDA (.sptr),Y
+		BEQ .done_count		; EOS? Done.
+		JSR check_printable_char
+		BCS .skip_count		; Control char?
+		INX
+.skip_count	INY
+		BNE .loop_count
+
+.done_count	PLA
+		STA .sptr+1
+		PLA
+		STA .sptr
+
+		TXA
+		RTS
+
+} ; TB_GET_VISUAL_STRLEN
+
+
+
+
+!ifdef TB_VRAM_READ_BYTE {
+;==============================================================================
+!zone VRAM_READ_BYTE
+; IN:	.Y	Index of line,
+;	.X	Index of column containing a two digit hex number on screen
+; OUT:	.A	Byte value of hex string
+;==============================================================================
+.raddr		!byte 0,0
+
+	.vptr = $f7
+
+vram_read_byte
+		PLA			; Save return address
+		STA .raddr+1
+		PLA
+		STA .raddr
+
+		LDA #<VRAM		; Read 2 chars, ignore empty first col.
+		STA .vptr
+		LDA #>VRAM
+		STA .vptr+1
+
+		; Y given by caller
+		CPY #$00
+		BEQ .skip		; Adjust pointer to row
+.loop		CLC
+		LDA .vptr		; Move pointer down a row
+		ADC #$28
+		STA .vptr
+		LDA .vptr+1
+		ADC #$00
+		STA .vptr+1
+		DEY
+		BNE .loop
+.skip
+		TXA
+		TAY
+		INY
+		LDA (.vptr),Y		; Convert to byte value
+		JSR str_to_nibble
+		STA $02
+		DEY
+
+		LDA (.vptr),Y		; Convert to byte value
+		JSR str_to_nibble
+		ASL
+		ASL
+		ASL
+		ASL
+		INY
+		ORA $02
+		TAX
+
+.done		LDA .raddr		; Restore return address
+		PHA
+		LDA .raddr+1
+		PHA
+
+		TXA
+		RTS
+
+} ; TB_VRAM_READ_BYTE
+
+
+!ifdef TB_DETECT_PAL_NTSC {
+;==============================================================================
+!zone DETECT_PAL_NTSC
+;==============================================================================
+; http://codebase64.org/doku.php?id=base:detect_pal_ntsc
+; 312 rasterlines -> 63 cycles per line PAL        => 312 * 63 = 19656 Cycles / VSYNC  => #>76  %00
+; 262 rasterlines -> 64 cycles per line NTSC V1    => 262 * 64 = 16768 Cycles / VSYNC  => #>65  %01
+; 263 rasterlines -> 65 cycles per line NTSC V2    => 263 * 65 = 17095 Cycles / VSYNC  => #>66  %10
+; 312 rasterlines -> 65 cycles per line PAL DREAN  => 312 * 65 = 20280 Cycles / VSYNC  => #>79  %11
+
+c64_model		!byte 0
+frames_per_second	!byte 0
+
+detect_c64_model
+		; Use CIA #1 Timer B to count cycles in a frame
+		SEI
+
+		LDA #$ff
+		STA $dc06
+		STA $dc07		; Latch #$ffff to Timer B
+
+		BIT $d011
+		BPL *-3			; Wait until raster > 256
+		BIT $d011
+		BMI *-3			; Wait until raster = 0
+
+		LDX #%00011001
+		STX $dc0f		; Start Timer B (One shot mode, timer
+					; stops automatically when underflow)
+
+		BIT $d011
+		BPL *-3			; Wait untill Raster > 256
+		BIT $d011
+		BMI *-3			; Wait untill Raster = 0
+
+		SEC
+		SBC $dc07		; Hibyte number of cycles used
+		AND #%00000011
+
+		CLI
+		STA c64_model
+
+		CMP #$00
+		BEQ .pal
+		CMP #$03
+		BEQ .pal
+.ntsc		LDA # 60
+		STA frames_per_second
+		BNE .exit		; Will always jump
+
+.pal		LDA # 50
+		STA frames_per_second
+.exit		LDA c64_model
+		RTS
+
+} ; TB_DETECT_PAL_NTSC
+
+
+;==============================================================================
+;EOF

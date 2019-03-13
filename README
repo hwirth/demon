@@ -1,0 +1,1040 @@
+
+                DEMON - Debugger/Monitor for the Commodore C-64
+                   copy(l)eft 2019 by http://harald.ist.org/
+
+INDEX
+=====
+	0. Index
+	1. Introduction
+		1.1 Overview
+		1.2 Special features of Demon
+	2. File list
+	3. Mode of operation
+		3.1 General description
+		3.2 Execution of the client program
+		3.3 Output screen
+		3.4 Context records and snapshots
+		3.5 Opcode matrix and alignment gap
+	4. Development environment, building Demon
+	5. Coding conventions
+		5.1 ZP pointers $f7..$ff
+		5.2 Temp byte at $02
+		5.3 .strbuf = tape_buffer
+		5.4 Default names
+		5.5 Debug comments, indentation
+	6. Help file syntax
+		6.1 Load address placeholder
+		6.2 Section names
+		6.3 Load other help files
+		6.4 Linking back to main help
+		6.5 End of help file
+		6.6 Example help file
+	7. Monitor commands
+		7.1 Not yet implemented
+		7.2 FC3 Monitor Commands
+	8. Known bugs
+	9. TODO
+	10. Reference material
+
+
+1. INTRODUCTION
+===============
+
+1.1 OVERVIEW
+------------
+
+Demon is a so called "Monitor", which is a specific type of assembler used in
+machines with little memory. It allows for direct manipulation of RAM contents,
+assembly/disassembly of machine language instructions and more. Unlike modern
+assemblers, everything input is stored directly in memory and can be called
+immediately without further processing. See "List of commands" for a full list
+of features.
+Demon provides a range of experimental features, which can be toggled on or off
+in  demon.a:!zone OPTIONS . Some of these features would not be included in a
+professional monitor due to memory constrainments, while they provide only some
+convenience or nice looks. Other features are there, because I wanted to try
+things out, e.g. context switching.
+
+
+1.2 SPECIAL FEATURES OF DEMON
+-----------------------------
+I love working on a real C64, but writing larger programs in FC3's monitor is
+very tedious, because inserting code is a lot of work. Demon tries to improve
+the situation by providing some functions, common monitor porgrams are lacking:
+
+1) Inserting/deleting instructions with automatic code relocation
+2) Step debugger/break points
+3) Normally running machine programs can be interrupted with the RESTORE key
+4) Help function providing C64 related reference material
+5) Disassembly shows typical CPU cycles and affected flags for instructions
+6) Direct mode: Immediate execution of instructions
+7) Context switching: Zero page, stack, video RAM, etc. are separated between
+   Demon and the client program - when the user starts a program, the run-time
+   environment is restored from a backup ("snapshot")
+
+
+2. FILE_LIST
+============
+demon.a		Main file, includes everything else. Init and exit functions
+		Contains a list of compile time options
+toolbox_conf.a	Color settings and selecting of Toolbox modules to link in
+variables.a	Global variables for all files
+main_menu.a	The main function. Handles keyboard input and cursor movement
+mmfn_scroll.a	Scroll through memory contents
+mmfn_fnkey.a	User definable function keys. Also provides  elfn_function_key
+eval_line.a	Command line parsing and helpers for command functions
+elfn_*.a	Individual command handlers
+opcode_matrix.a	Definitions for the 6502 instruction set
+system_state.a	Run-time context switching functions and snapshot handling
+self_test.a	Verifies, if assembly/disassembly works correctly
+test_programs.a	Small routines for loading to  heap
+debug.a		Helper functions for the developer of Demon
+*.txt		Source files for help text. Needs conversion to PETSCII before
+		they can be used. The main file is  main.hlp . For conversion,
+		"petcom" (a small C program) is used, which I found online.
+
+
+3. MODE OF OPERATION
+====================
+
+3.1 GENERAL DESCRIPTION
+-----------------------
+After initialization, the user is greeted with a boot message and the current
+contents of the CPU registers. All commands are a single letter followed by
+parameters, usually at least one memory address. After entering or loading a
+program (the "client" program), one can simply run it or single-step through
+the individual instructions.
+
+The main loop of Demon is  main_menu.a:main_menu . It handles user input and
+calls the command line parsing function  eval_line.a:mmfn_eval_line , when
+Return is pressed. The line, the cursor is currently in, will be analyzed and
+appropriate action will be taken. When an error is found, the cursor will be
+placed over the first offending character and it will blink in red.
+
+When the user tries to leave the screen by pressing a cursor key while on the
+edge of the screen, displaying of memory contents will be continued. This is
+handled by the functions in  mmfn_scroll.a .
+
+
+3.2 EXECUTION OF THE CLIENT PROGRAM
+-----------------------------------
+Most of the work for this is done in  elfn_go.a  and  system_state.a .
+
+With the go-command ("G"), a program can be started. Demon uses two process
+contexts: "Client" and "Monitor". When a program is started, CPU state, zero
+page contents, stack and VIC configuration are swapped. Switching of contexts
+is handled in  system_state.a . While context swapping isn't exactly necessary
+for the operation of a Monitor, it allows for a strict separation of run-time
+environments for the monitor and the client program, providing a separate
+output screen that isn't disturbed by the data displayed and commands entered
+while in monitor mode. The context switching routines could be used to build a
+real multitasking system, too.
+
+Single-stepping is realized by replacing the instruction following the current
+one with a BRK. A backup copy of the original instruction is kept for restoring
+later. When a BRK is encountered by the client program,  custom_brk_handler
+will be called via an interrupt. It then determines the program counter of the
+client by looking up the return address for the interrupt on the stack. It is
+stored it in the client context record (client_ctxrec) and replaced with the
+address of  elfn_go.a:elfn_go:brk_return , thus returning control to Demon,
+when the interrupt routine executes the RTI instruction and the client program
+is resumed.
+
+A normally running program can be interrupted by pressing the RESTORE key. This
+will trigger an NMI, which will end up in  custom_nmi_handler . It then injects
+a new break point to the client program, thus having control returned to Demon
+like it was a normal break point placed while single-stepping.
+
+
+3.3 OUTPUT SCREEN
+-----------------
+Before the client program is started (or single stepped), its output screen is
+restored. This will flicker, when single-stepping. I could place the VRAM of
+both contexts in different locations and have the client "silently" write to
+its own screen, but CRAM (color information) is always at $D800, so no perfect
+solution for this is possible.
+You can view the output screen by pressing the "Arrow-Up" key, while in normal
+Monitor mode.
+
+
+3.4 CONTEXT RECORDS and SNAPSHOTS
+---------------------------------
+CPU state is kept in a context record (client_ctxrec, monitor_ctxrec) and
+is updated, when a switch happens.
+
+A full copy of the system state is stored in  client_snapshot  and
+ monitor_snapshot , which are stowed away in the RAM beneath the KERNAL ROM at
+$e000..$ffff. Each snapshot contains a copy of VRAM and CRAM (screen contents
+and color information), the zero page and stack for the context, as well as a
+copy of the hardware registers of the VIC chip and the context record of the
+according process.
+
+Since the RAM beneath the ROMs cannot be accessed by default, the snapshot
+routines have to disable the ROMs, which leaves the interrupt table at
+$fffa..$ffff without vectors for the IRQs, so a small "catch-all" ISR is
+provided while the ROMs are turned off, just in case an unexpected interrupt
+happens.
+
+
+3.5 OPCODE MATRIX and ALIGNMENT GAP
+-----------------------------------
+The tables  opcode_matrix  and  amode_matrix  are aligned to an address
+(a mod 256) == 0. This way, an opcode read from memory can directly be used as
+index into these tables without further conversion. This may create a gap of
+unused bytes above  opcode_matrix . The size of this gap is shown in the
+boot message as "G=xxx", if it is non-zero.
+
+
+4. DEVELOPMENT ENVIRONMENT, BUILDING DEMON
+==========================================
+
+Demon is written using the ACME assembler, source files use TAB indentation,
+assuming a tab width of 8 space characters.
+
+
+4.1 FILE HIERARCHY
+------------------
+	./demon/build.sh		Restart Vice, convert help, call ACME
+	./demon/prepare_symbols.sh	Convert acme symbols (no longer needed)
+	./demon/_prepare_symbols.php	(don't ask)
+
+	./demon/dev/*.{a,txt}		Demon source
+	./demon/dev/README		This very file
+
+	./toolbox/dev/*.a		User interface library
+
+	./../DISK/*.hlp			Drive 10 in Vice, host fs access
+	./../DISK/demon.prg
+
+
+4.2 BUILD.SH
+------------
+	hmw@cursor/sda8:/data/project/c64/sources/demon/dev $ ../build.sh demon
+	Building 'demon' in /data/project/c64/sources/demon/dev
+	help_main.txt:	2021	../../../DISK/main.hlp
+	help_vic.txt:	1445	../../../DISK/vic.hlp
+	help_zp.txt:	3639	../../../DISK/zp.hlp
+	Restarting emulator...
+	Attaching ../disk1.d64 to drive 8
+	17768 LOC (11601 + 6167)
+	Saving 15823 (0x3dcf) bytes (0x801 - 0x45d0 exclusive).
+	Converting ACME symbols to VICE format...done.
+	Autostarting program and launching telnet connection to debugger...
+	Compilation finished successfully.
+	hmw@cursor/sda8:/data/project/c64/sources/demon/dev $
+
+
+4.1 GEANY
+---------
+	Base path: /data/project/c64/sources/demon/dev
+	File name: /data/project/c64/sources/demon/demon.geany
+	Build/Set Build Commands/Independent Commands/Make:
+		../build.sh demon ../disk1.d64
+		(Default hotkey Shift+F9)
+
+
+5. CODING CONVENTIONS
+=====================
+
+5.1 ZP pointers $f7..$ff
+------------------------
+$f7..$fa are assigned to the RS232 KERNAL functions and are pretty safe to
+overwrite. $fb..$ff are designated "free bytes for operating system" and
+"temporary BASIC storage" and also seem not to affect the system, when
+destroyed.
+Toolbox functions use these ZP pointers, too, but they should restore them
+before returning to the caller, so we can use them freely.
+Some functions use $f3..$f6, but they back up and restore the contents. These
+bytes are designated "Pointer to current position in color RAM" and "Pointer
+to keyboard decoding table".
+
+
+5.2 Temp byte at $02
+--------------------
+ZP byte $02 is not used by the KERNAL or BASIC interpreter. In our code, we
+only use it for short term purposes. That means, there should never be a call
+to another function, while we hold a value in $02, preventing conflicts.
+
+
+5.3 .strbuf = TAPE_BUFFER
+-------------------------
+The system uses $33c..$3fb as a buffer when loading/saving data from/to the
+Datasette. Demon uses this area for temporary storing strings. Alternatively,
+we may be able to use $200 - $258 ("System/BASIC input buffer"), but that is
+untested.
+
+
+5.4 Default names
+-----------------
+.sptr	Source pointer
+.tptr	Target pointer
+.bptr	Begin pointer
+.eptr	End pointer
+.strbuf	String buffer, currently using TAPE_BUFFER = $033c..$03fb
+
+
+5.5 Debug comments, indentation
+-------------------------------
+Grep all files for a double semicolon (";;") to find locations, that need
+improvement.
+
+Wrongly indented code indicates temporary code for debugging (typically
+changing border colors with INC $d020). Sometimes I temprarily wrongly indent
+parts of the code, while actively working on a function. Before increasing the
+version number of Demon, those parts should be cleaned up, though.
+
+In case of  main_menu.a:main_menu , parts of the code are wrongly indented to
+separate it from the "pure" menu function; I plan to move the menu to the
+Toolbox library, where it will provide hooks, so custom functionality needs not
+to be mixed in anymore.
+
+
+6. HELP FILE SYNTAX
+===================
+Help files will be converted to PETSCII in  build.sh  via a call to a C-program
+named "petcom". Note, that you cannot use upper case letters for text.
+
+Help files will be loaded to $c000..$cfff, so the maximum size for each file
+is 4096 bytes.  build.sh  will show files sizes.
+
+
+6.1 LOAD ADDRESS PLACEHOLDER
+----------------------------
+At the moment, the loading routine assumes two bytes load address at the
+start of the file, so the first two bytes in the help file must be
+placeholders. Two dashes are typically used for this.
+
+
+6.2 SECTION NAMES
+-----------------
+A section name is introduced with a capital "X". The first section should be
+a "nameless" section, so the command "?" without parameter will show something.
+Since the first two bytes are placeholders, the first line consists of two
+dashes and an "X": --X
+
+The first, nameless section should list the sections available in the help file.
+
+Section names ("topics") may contain space characters, which can be used to
+define sub-sections. If a section needs several pages, you could define the
+sections like so: "Xvic 1", "Xvic 2", ...
+
+If the user requests a topic, that is not found, the
+search is repeated a second time with the current help file name (without
+extension) prepended to the original query term:
+
+Assuming, "help.hlp" is loaded, and no section 3 ("X3") exits, issuing
+
+	?3
+
+will trigger a second pass searching for "help 3", same as entering
+
+	?help 3
+
+The help file will have to provide a section named "Xhelp 3" for this to work.
+
+
+6.3 LOAD OTHER HELP FILES
+-------------------------
+If a topic does not fit into the current help file, you can trigger automatic
+loading of another file, by placing am upper case "L" followed by the file name
+without extension in the according section. E.g. section BIG is stored in
+another file, the section would look like:
+
+	Xbig
+	Lbig
+
+Section- and file-name don't have to be identical, but it makes sense to name
+them identically.
+
+
+6.4 LINKING BACK TO MAIN HELP
+-----------------------------
+Each file should provide a link back to the main help file, or the user won't
+be able to view the main help topics again. Typically you provide a section
+named "?" which loads the main help file. You should mention the back command
+in the first "empty" section, too. See example below.
+
+	X?
+	Lmain
+
+
+6.5 END OF HELP FILE
+--------------------
+The help function should abort, when $d000 is reached, but for faster
+processing, each help file should end in a line containing two upper case "X".
+
+
+6.6 EXAMPLE HELP FILE
+---------------------
+--X
+topics: top1 top2
+main help: ??
+X?
+Lmain
+Xtop1
+topic 1 subtopics: 1 2
+Xtop1 1
+subtopic 1-1
+Xtop1 2
+subtopic 1-2
+Xtop2
+topic 2
+XX
+
+
+7. MONITOR COMMANDS
+===================
+In case, this list isn't up to date, you can check for all implemented commands
+in  eval_line.a:mmfn_eval_line:.function_table .
+
+aAAAA INSTR	Assemble new instruction to memory
++AAAA INSTR	Assemble and relocate following code (see W command)
+-AAAA		Delete one instruction and relocate following code
+bAAAA [EEEE]	Show memory in binary or as sprite data
+dAAAA [AAAA]	Disassemble memory
+fAAAA EEEE PP [PP...] Fill memory area with pattern
+g[AAAA]		Start/Step program (at given address or current PC)
+i[+/-]		Show status, enable/disable illegal opcodes
+k[N [Text]]	List/clear/set custom function key
+l"fname" DD [AAAA] Load file from disk
+mAAAA [AAAA]	Hexdump of memory
+r		Show processor status
+s"fname" DD AAAA EEEE Save memory area to file
+tAAAA EEEE TTTT	Copy memory
+uAAAA EEEE TTTT	Copy memory and adjust absolute addresses (Relocate)
+wAAAA EEEE	Set working window for insert mode
+>INSTR		Direct mode: Execute instruction immediately
+#D[D[D[D[D]	DEC --> HEX
+$HH[HH]		HEX --> DEC
+*[AAAA [Name]]	Symbols
+?[TOPIC]	Show help
+
+
+7.1 NOT YET IMPLEMENTED
+-----------------------
+'SCREEN		Enter text and store as screen code
+"PETSCII	Enter text and store in PETSCII format
+@DOSCMD		Send command to floppy drive
+
+
+7.2 FC3 Monitor Commands
+------------------------
+As a reference for expanding Demon, here is a command list of the Monitor of
+the Final Cartridge III. We will try to keep our commands compatible:
+
+A	Assemble
+C	Compare
+D	Disassemble
+EC	Edit Character
+ES	Edit Sprite
+F	Fill Memory
+G	Go
+H	Hunt
+I	Interrogate (Show memory as text)
+L	Load
+M	Memory dump
+O	Back switch
+OD	Disk monitor
+P	Print memory (hard copy)
+R	Registers
+S	Save
+T	Transfer
+X	Exit
+#	DEC-->HEX
+$	HEX-->DEC
+@	DOS command
+*R	Read block
+*W	Write block
+
+
+8. KNOWN BUGS
+=============
+*) When assembling an instruction with relative address (branch instructions),
+   the range is not checked. If the target is outside the +/- 127 bytes range,
+   an incorrect target address is calculated while no error is indicated. This
+   should be solved, when  assemble.a:get_amode  is being rewritten.
+*) When inserting code, branches that jump across the insertion location, are
+   not being recalculated.
+*) Direct mode does not catch dangerous instructions like RTS, RTI, branches,
+   etc.
+*) When the client disables interrupts (SEI), break points will no work
+
+
+9. TODO
+=======
+
+;--REDUCING-CODE-SIZE----------------------------------------------------------
+[ ] .is_hex_digit
+[ ] 2-byte Skip:
+	CPX # 5		CPX # 5		CPX #5
+	BEQ t1		BEQ t1		BEQ t1
+	LDA #$4d	LDA #$4d	LDA #$4d
+	BNE t2		.byte $2c  -->	BIT $53ad
+t1	LDA #$53	LDA #$53   -----------^
+t2	JSR bsout	JSR bsout	JSR bsout
+--------------------------------------------------
+[ ] Toolbox: Get rid of puts, rewrite based on bsout
+[ ] Opcode maxtrix: Combine address mode and cycles (low/high nibbles)
+[ ] Opcode maxtrix: Combine cycles and amode: Don't use $80 flag for ignore
+    opcode, but number the amodes for unwanted ops $a, $b and use BCC instead
+    of AND
+[ ] Disassemble: Get rid of .cctr, use .X instead
+
+;--GENERAL---------------------------------------------------------------------
+[ ] Help: 4K
+[ ] Help: If WS includes $c000+, refuse to load
+[!] Illegal opcodes --> runtime switch
+[!] Check snapshot chip registers areas for off-by-one size
+[!] assemble: aREL out of range not caught
+[!] assemble: rewrite find_amode
+	https://www.c64-wiki.com/wiki/Adress_mode
+	aIMP	OPC
+	aIMM	OPC #$ll
+	aABS	OPC $hhll
+	aABX	OPC $hhll,X
+	aABY	OPC $hhll,Y
+	aZP	OPC $ll
+	aZPX	OPC $ll,X
+	aZPY	OPC $ll,Y	(Invalid according to Vice)
+	aREL	OPC $hhll	(OPC $rr)
+	aIND	OPC ($hhll)
+	aINX	OPC ($ll,X)
+	aINY	OPC ($ll),Y
+[!] Scroll (down): When hibyte of addr changes --> bugs
+[!] panic+divider: writes outside vram-->crash
+[!] panic: restart properly, fix sptr
+[!] panic: reset menu color properly
+[!] panic: don't copy monitor context to client on restart
+[!] Save: with load address
+[!] When USE_IRQ is disabled, call_get_key does not work in mmfn_output_screen
+[!] Verify aREL
+[!] assemble.a:.find_space - what if aIMM and #0 following instead of space
+    Check assemble.a:.skip_numbers, if changing .find_space!
+[!] Invalid amode: put cursor to first bad char instead of EOL
+[!] Status save/restore is missing sprite vectors in VRAM (only #1000 bytes
+    saved)
+[!] Move context data to top of memory (below catch-all-ISR)
+[?] $00 and $01 not saved in snapshot - correct for that
+[?] Disable NMI while in STEPMODE_IDLE
+[?] When keyboard handling is done in the IRQ by ourselves, change to using R/S
+    to interrupt a running client routine instead of using Restore-NMI
+[?] Second, optional param: only if spaces!
+[ ] Help: Show opcode info procedurally (Popcodes)
+
+;--TOOLBOX---------------------------------------------------------------------
+[!] puts_v/cptr @ZP - don't scatter them around, also - backup befor client?
+[!] Set IRQ lines according to scroll_area
+[!] Restore IRQ before G, show in R
+[ ] print_menu: top right string, right align (make function for that?)
+[ ] print_menu: without IRQ, bottom menu line is empty
+
+;--SYMBOLS---------------------------------------------------------------------
+[?] Zeropage symbols
+[ ] *<cmd char> --> function table
+[ ] *K KERNAL-, *B BASIC-symbols, *Z Zeropage (Load them from disk)
+[~] eval_line can't call  symbol_to_address , because the line is screen code
+[!] Test: try adding a new symbol, when list is full
+
+;--MEMORY-LAYOUT---------------------------------------------------------------
+[ ] Load @ $a000, disable basic; Entry point, NMI?
+[ ] Store help and lists under I/O, dynamically init keys, puts - I/O?
+[?] Copy KERNAL to RAM below ROM, so we can set breakpoints
+
+;--HELP------------------------------------------------------------------------
+[!] Fix drive nuber (currently hardcoded to 10)
+
+;--SCROLL----------------------------------------------------------------------
+[!] Dump scroll up faster than down!?
+[?] Insert: update lines below inserted on screen
+
+;--RELOCATE--------------------------------------------------------------------
+[!] Also update branches, if they jump over the insert location
+[ ] Relocate: Only change high byte for speed improvement
+[ ] Speed up transfer: First/last partial page extra, rest in 256-loop
+[ ] Update symbols
+
+;--STEPPER---------------------------------------------------------------------
+[!] Save xzp
+[ ] Step: Show affected memory cells, cycles (total)
+[ ] Move VRAM of Monitor, so client can write without screen switch or catch
+    access to VRAM/CRAM (like a phantom register)
+[ ] Command: ret (step until RTS/RTI was executed - watch out for IRQ?)
+[ ] Direct mode: JMP, BEQ, RET, RTI? --> single step mode
+[ ] Breakpoint list: After each step check, if stop is needed
+[ ] Check for KIL when setting break points and warn or something
+[ ] STEPMODE_STEP: List watches in 3 colors: no change, client wrote, someone
+    else wrote. Command: toggle automatic watches display: Don't, show all,
+    show changed, show condition met
+;------------------------------------------------------------------------------
+[ ] Fullscreen step: Like ARES. Show regs in window, RVS for current op
+[ ] R/S while tracing
+[ ] Watches, break conditions
+[ ] Toggle break point for this line
+[ ] Show break points, watches in disassembly
+[ ] Show nr. total cycles via BRK-stepper
+[ ] Edit watches, break conditions
+[ ] Trace: tr <list of opcs>, showing only those while running
+
+;--FEATURES--------------------------------------------------------------------
+[ ] VERIFY
+[ ] d1000-, dw (disass workspace)
+[.] Reference on disk (KERNAL/BASIC routines, ZP addresses, I/O, Opcodes, etc)
+[ ] Scrollable dirlist
+[ ] Hexdump, colors: Visualize used Stack space
+[?] Use client_bank for disassembly/assembly, hexdump
+[ ] Initialize only the first time when demon is started, except init message
+[ ] Line read in: Stop copying to buffer, when a ':' is encountered
+[ ] @08.1:dc<command>
+;------------------------------------------------------------------------------
+[ ] Handle keyboard manually, get rid of KERNAL/BASIC
+[ ] Handle keyboard in IRQ -> R/S, window/context switch, etc
+[ ] Load/save symbols from disk
+[ ] Edit symbols
+[ ] Assembly: symbol/break point/watch for this line with special chars at end
+[ ] Relocate monitor (on the fly)
+[ ] Sprites, Text (scr, pet - convert block), charset
+[ ] ISR for user's code? NMI?
+[ ] "Who jumps here?"
+[ ] Printer support
+[ ] Floppy (sector, disked, FRAM/FROM) (like a bank)
+[ ] Syntax highlight, show special ops in color, like JMP, RTS, Bxx, BRK
+;------------------------------------------------------------------------------
+[ ] Pseudo instructions: .byte, .word, .char, .text
+[ ] Show/enter byte: aaaa bb      $bb
+
+;--CODE FOLDING----------------------------------------------------------------
+[ ] Scan for subroutines
+[ ] Offset in disassemble, scroll-stop
+[ ] Fetch function: follow all jumps in case of multiple RTSs?
+[ ] Dividing line after JMP, RTS, RTI
+[ ] Symbols
+[ ] Named KERNAL/BASIC calls
+[ ] Named Toolbox calls
+
+;--MULTITASKING----------------------------------------------------------------
+[ ] Multiple contexts
+[ ] Save context to disk (save_state + program code)
+[ ] &[AAAA] Dispatch process
+[ ] Process can return early, if it needs to be called only every n context
+    switches, thus providing more CPU time to other threads
+[ ] Priority: Give this thread +/- n time slices
+[ ] Task switching/Multitasking (assigned windows per context)
+[ ] Multitasking/Windows/Screens:
+    Colors, crsrpos, rvs state, upper/lower case
+    Stack, Vectors, Regs, I/O ports (SID, CIA), ROM config
+[ ] SpriteEd, Fumble, CharGen - external apps loaded from disk, when needed
+[ ] Client context: requested stack size (or a compile time switch)
+[?] Save only used stack and give the client always the full stack
+[ ] Segment management
+
+;--MISC. IDEAS-----------------------------------------------------------------
+[ ] Convert machine code to pseudo asm without addresses, but only symbols,
+    keeping everything relocatable when closing editor. Starting ed: Fetch
+    routine to buffer for faster editing without moving all functions when
+    inserting new stuff, when leaving ed, rearrange the whole program
+[ ] Keep track of touched mem when assembling; Automatic save with SYS2061
+;------------------------------------------------------------------------------
+[ ] Redcode Jitter/Pseudo Opcode converter
+[ ] ICWS94, 2048 cells:16K RAM: OOOO MMMm mmAA AAAA AAAA ABBB BBBB BBBB
+[ ] 2048 cells...multicolor mode? bitmap mode?
+
+https://www.c64-wiki.de/wiki/SMON
+
+
+10. REFERENCE MATERIAL
+======================
+
+SNAPSHOTS configured to save ZP+Stack, without XZP $200-$3ff
+------------------------------------------------------------
+;client:  e000-ea7c  monitor: ea7d-f4f9
+; zp      e7d0-e9cf   zp      f24d-f44c
+; vic     e9d0-ea00   vic     f44d-f47d
+; sid1    ea01-ea52   sid1    f47e-f4cf
+; cia1    ea53-ea72   cia1    f4d0-f4ef
+; context ea73-ea7c   context f4f0-f4f9
+
+
+ACME CROSSASSEMBLER
+-------------------
+https://sourceforge.net/p/acme-crossass/code-0/16/tree/trunk/docs/QuickRef.txt
+https://sourceforge.net/p/acme-crossass/code-0/16/tree/trunk/docs/AllPOs.txt
+https://sourceforge.net/p/acme-crossass/code-0/16/tree/trunk/docs/AddrModes.txt
+https://sourceforge.net/p/acme-crossass/code-0/16/tree/trunk/docs/Illegals.txt
+https://sourceforge.net/p/acme-crossass/code-0/16/tree/trunk/docs/Errors.txt
+
+
+Die Speicheraufteilung des C64 im Normalzustand - für genauere Informationen siehe PLA.
+
+$FFFF = 65535 ┌───────────────┬───────────────┐
+              │---------------│|||||||||||||||│     ||| = wird z.B. bei PEEK gelesen
+              │---------------│|||||||||||||||│     --- = wird z.B. bei POKE geschrieben
+              │---------------│|||||||||||||||│     +++ = lesend + schreibend
+              │---------------│||| KERNAL ||||│     sonst = von BASIC aus nicht erreichbar
+              │---------------│|||||||||||||||│
+              │---------------│|||||||||||||||│
+              │---------------│|||||||||||||||│
+$E000 = 57344 ├───────────────┼───────────────┼───────────────┐
+              │               │               │+++++++++++++++│
+              │               │     CHAR      │+++++ I/O +++++│
+              │               │               │+++++++++++++++│
+$D000 = 53248 ├───────────────┼───────────────┴───────────────┘
+              │+++++++++++++++│
+              │+++++++++++++++│
+              │+++++++++++++++│
+$C000 = 49152 ├───────────────┼───────────────┐
+              │---------------│|||||||||||||||│
+              │---------------│|||||||||||||||│
+              │---------------│||| BASIC- ||||│
+              │---------------│|||  ROM   ||||│
+              │---------------│|||||||||||||||│
+              │---------------│|||||||||||||||│
+              │---------------│|||||||||||||||│
+$A000 = 40960 ├───────────────┼───────────────┘
+              │+++++++++++++++│
+              │+++ BASIC- ++++│
+              │+++  RAM   ++++│ \
+              .               .  - Details in Speicherbelegung (BASIC)
+              .               . /
+              .               .
+              │+++ BASIC- ++++│
+              │+++  RAM   ++++│
+$0800 = 2048  │+++++++++++++++│-┐
+$0400 = 1024  │+++++++++++++++│-┘Bildschirmspeicher
+$0000         └───────────────┘-┘Zeropage und Erweiterte Zeropage
+
+
+$4000 = 16384
+
+EOF
+
+
+
+
+
+
+get_instruction_length
+;------------------------------------------------------------------------------
+; IN:	.A	int8	Opcode
+; OUT:	.A	int8	Length of instruction
+
+		STY $02			; Back up .Y
+
+!ifdef ILLEGAL_OPCODES {
+		LDY illegal_opcs
+		BNE .skip_illegals
+
+		PHA			; Remember opcode
+		TAY
+		LDA opcode_matrix,Y
+		CMP # $38*3		; First illegal opcode string index
+		BCS .ret_1
+		PLA			; Restore opcode
+		JMP .skip_illegals
+
+.ret_1		PLA
+		JMP .return_1
+.skip_illegals
+}
+		TAY
+		LDA amode_matrix,Y
+		CMP #aIMM
+		BCC .return_1
+		CMP #aABS
+		BCC .return_2
+.return_3	LDA # 3
+		BNE .done		; Will always jump
+.return_2	LDA # 2
+		BNE .done		; Will always jump
+.return_1	LDA # 1
+
+.done		LDY $02			; Restore .Y
+		RTS
+
+
+
+
+
+!if (0) {
+
+
+
+
+!ifdef WORKSPACE {
+;==============================================================================
+!zone WORKSPACE_INSERT
+;==============================================================================
+;        .sptr=5, offs=2
+; ws_s     |     ws_e
+;  |   .---->----. |      Pointer from area below to above sptr
+;  1 2 3 4 5 6 7 8 9
+;    '----<----'          Pointer from area above to below sptr
+;
+; 1 2 3 4 5 6 7 8 9       Step 1: Relocate [sptr, ws_e] --> (sptr + offset)
+; 1 2 3 4     5 6 7 8 9   Step 2: Pseudo-reloc [ws_s, ws_e] --> (ws_s + offs)
+;------------------------------------------------------------------------------
+
+	.bptr	= $c1			; Shared with relocate!
+	.wptr	= $c3			; Shared with relocate!
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. relocate, transfer!
+	.tptr	= $fb			;
+
+	.offset	= $fd
+
+workspace_insert
+;------------------------------------------------------------------------------
+; IN:	.X/.A	int16	Address for new room
+;	.Y	int8	Number of bytes to make room for
+; OUT:	CARRY	Boolean	FALSE, if within workspace window
+
+		STX .sptr		; Save parameters
+		STA .sptr+1
+		STY .offset
+;------------------------------------------------------------------------------
+		; Step 1: Relocate [sptr, ws_e] --> (sptr + offset)
+
+		JSR save_zp_pointers
+					; sptr is already set
+
+		LDA workspace_end	; eptr := ws_e
+		STA .eptr
+		STA .wptr
+		LDA workspace_end+1
+		STA .eptr+1
+		STA .wptr+1
+
+		CLC			; .tptr := sptr + offset
+		LDA .sptr
+		ADC .offset
+		STA .tptr
+		LDA .sptr+1
+		ADC # 0
+		STA .tptr+1
+
+		JSR start_relocate
+		JSR restore_zp_pointers
+
+;------------------------------------------------------------------------------
+		; Step 2: Pseudo-reloc [ws_s, sptr-1] --> (ws_s + offs)
+
+		CLC
+		LDA .sptr		; Copy  .sptr . It will move and we
+		STA .bptr		; need to check, if an address is in
+		LDA .sptr+1		; the moved block.
+		STA .bptr+1
+
+		SEC			; eptr := sptr - 1
+		LDA .sptr
+		SBC # 1
+		STA .eptr
+		LDA .sptr+1
+		SBC # 0
+		STA .eptr+1
+
+		SEC			; sptr := ws_s
+		LDA workspace_start	; tptr := ws_s + offset
+		STA .tptr
+		SBC .offset
+		STA .sptr
+		LDA workspace_start+1
+		STA .tptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDA workspace_end
+		STA .wptr
+		LDA workspace_end+1
+		STA .wptr+1
+!if (1) { ;;
+		SEC			; Calculate offset for operands
+		LDA .tptr
+		SBC .sptr
+		STA .offset
+		LDA .tptr+1
+		SBC .sptr+1
+		STA .offset+1
+}
+		LDA workspace_start
+		STA .sptr
+		LDA workspace_start+1
+		STA .sptr+1
+
+		JMP start_adjust
+		;RTS
+
+}
+
+
+!ifdef WORKSPACE {
+;==============================================================================
+!zone WORKSPACE_DELETE
+;==============================================================================
+;        .sptr=5, offs=2
+; ws_s     |     ws_e
+;  |   .---->----. |      Pointer from area below to above sptr
+;  1 2 3 4 5 6 7 8 9
+;    '----<----'          Pointer from area above to below sptr
+;
+; 1 2 3 4 5 6 7 8 9       Step 1: Relocate [sptr+offset, ws_e] --> sptr
+; 1 2 3 4 7 8 9           Step 2: Pseudo-reloc [ws_s, ws_e] --> (ws_s - offs)
+;------------------------------------------------------------------------------
+
+	.bptr	= $c1			; Shared with relocate!
+	.wptr	= $c3			; Shared with relocate!
+
+	.sptr	= $f7			;
+	.eptr	= $f9			; Shared w. relocate, transfer!
+	.tptr	= $fb			;
+
+	.offset	= $fd
+
+.error		JMP line_show_error
+
+workspace_delete
+;------------------------------------------------------------------------------
+		LDY # 1
+		JSR line_expect_int16
+		BCS .error
+		STX .sptr
+		STA .sptr+1
+
+		JSR line_expect_int16
+		BCS .delete_one		; Only one parameter was given
+		STX .eptr
+		STA .eptr+1
+;------------------------------------------------------------------------------
+		; Walk memory, checking instruction lengths to adjust .eptr,
+		; so we don't delete a partial instruction at the end
+
+		LDA .sptr
+		STA .tptr
+		LDA .sptr+1
+		STA .tptr+1
+
+		LDY # 0
+.loop_walk	LDA (.tptr),Y		; Get opcode
+		JSR get_instruction_length
+		CLC
+		ADC .tptr
+		STA .tptr
+		LDA .tptr+1
+		ADC # 0
+		STA .tptr+1
+		;
+		CMP .eptr+1
+		BCC .loop_walk		; tptr hi < eptr hi? Not at end.
+		BEQ .check_walk_lo	; tptr hi = eptr hi? Check low bytes
+		BCS .end_walk		; tptr hi > eptr hi? Above end.
+
+.check_walk_lo	LDA .tptr
+		CMP .eptr
+		BCC .loop_walk		; tptr lo < eptr lo? Not at end.
+		BEQ .loop_walk		; tptr lo = eptr lo? End, go overshoot
+
+.end_walk	LDA .tptr	; wptr
+		STA .eptr
+		LDA .tptr+1
+		STA .eptr+1
+
+		JMP .start_del
+;------------------------------------------------------------------------------
+		; Only one parameter was given, deleting just one instruction
+
+.delete_one	LDY # 0
+		LDA (.sptr),Y		; Get opcode
+		JSR get_instruction_length
+		CLC
+		ADC .sptr
+		STA .eptr
+		LDA .sptr+1
+		ADC # 0
+		STA .eptr+1
+;------------------------------------------------------------------------------
+		; Step 1: Relocate [sptr+offset, ws_e] --> sptr
+
+.start_del	SEC
+		LDA .eptr
+		SBC .sptr
+		STA .offset
+		LDA .eptr+1
+		SBC .sptr+1
+		STA .offset+1
+
+		JSR save_zp_pointers
+
+		LDA .sptr		; .tptr := sptr
+		STA .tptr
+		LDA .sptr+1
+		STA .tptr+1
+
+		CLC			; sptr := sptr + offset
+		LDA .sptr
+		ADC .offset
+		STA .sptr
+		LDA .sptr+1
+		ADC .offset+1
+		STA .sptr+1
+
+		LDA workspace_end	; eptr := ws_e
+		STA .eptr
+		STA .wptr
+		LDA workspace_end+1
+		STA .eptr+1
+		STA .wptr+1
+
+		JSR start_relocate
+		JSR restore_zp_pointers
+;------------------------------------------------------------------------------
+		; Step 2: Pseudo-reloc [ws_s, ws_e] --> (ws_s + offs)
+
+		CLC
+		LDA .sptr		; Copy  .sptr . It will move and we
+		STA .bptr		; need to check, if an address is in
+		LDA .sptr+1		; the moved block.
+		STA .bptr+1
+
+		SEC			; eptr := sptr - 1
+		LDA .sptr
+		SBC # 1
+		STA .eptr
+		LDA .sptr+1
+		SBC # 0
+		STA .eptr+1
+
+		SEC			; sptr := ws_s
+		LDA workspace_start	; tptr := ws_s + offset
+		STA .tptr
+		SBC .offset
+		STA .sptr
+		LDA workspace_start+1
+		STA .tptr+1
+		SBC # 0
+		STA .sptr+1
+
+		LDA workspace_end
+		STA .wptr
+		LDA workspace_end+1
+		STA .wptr+1
+!if (1) { ;;
+		SEC			; Calculate offset for operands
+		LDA .sptr
+		SBC .tptr
+		STA .offset
+		LDA .sptr+1
+		SBC .tptr+1
+		STA .offset+1
+}
+		LDA workspace_start
+		STA .sptr
+		LDA workspace_start+1
+		STA .sptr+1
+
+		JMP start_adjust
+		;RTS
+}
+
+
+
+}
+

@@ -1,0 +1,357 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+!ifdef SCROLL_CONTINUE {
+
+
+;==============================================================================
+!zone INSERT_LINE
+;==============================================================================
+
+insert_line
+;------------------------------------------------------------------------------
+!if (0) {
+		PHA
+		TXA
+		PHA
+		TYA
+		PHA
+
+		LDA zp_crsr_col
+		PHA
+		LDA zp_crsr_row
+		PHA
+}
+		LDA scroll_top
+		PHA
+
+		LDX zp_crsr_row
+		INX
+		STX scroll_top
+		JSR scroll_down
+
+		PLA
+		STA scroll_top
+!if (0) {
+		PLA
+		TAY
+		PLA
+		TAX
+		JSR goto_xy
+
+		PLA
+		TAY
+		PLA
+		TAX
+		PLA
+}
+		RTS
+
+
+;==============================================================================
+!zone MMFN_CRSR_UP_DOWN
+;==============================================================================
+
+	.opcode	= prev_rom_config
+	.sptr	= puts_vptr
+	.strbuf	= TAPE_BUFFER
+	.PLACEHOLDER = 0
+
+.find_command
+;==============================================================================
+		; Find out, if scrolling up or down
+
+		LDA zp_crsr_row
+		CMP scroll_top
+		BEQ .init_top
+.init_bottom	LDA # -40		; Adjust ADC and SBC instructions
+		STA .move_add_lo+1	; accordingly, so the same loop can
+		LDA # -8		; walk the screen up or down
+		STA .hexdump_sbc_lo+1
+		LDA #$ff
+		BNE .skip_init		; Will always jump
+
+.init_top	LDA # 40
+		STA .move_add_lo+1
+		LDA # 8
+		STA .hexdump_sbc_lo+1
+		LDA #$00
+.skip_init	STA .move_add_hi+1
+		STA .hexdump_sbc_hi+1
+;------------------------------------------------------------------------------
+		LDA zp_crsr_col		; Remember cursor position, we want it
+		PHA			; to stay, where it was
+		LDA zp_crsr_row
+		PHA
+
+		JSR goto_pos0		; Move to pos1, caluclating puts_vptr
+;------------------------------------------------------------------------------
+		; Look at every line until we find a command and address
+
+		SEC			; Calculate height of scrollable area
+		LDA scroll_bottom
+		SBC scroll_top
+		TAX
+.loop		LDY # 0			; Inspect char at begin of line
+		LDA (.sptr),Y
+!convtab SCR {	CMP #'.' }		; Valid (scrollable) command?
+		BEQ .call_check		; Possibly update screen and exit the
+!convtab SCR {	CMP #':' }		; loop
+		BEQ .call_check
+!convtab SCR {	CMP #'%' }
+		BEQ .call_check
+.check_return
+		CLC			; Advance pointer to next row
+		LDA .sptr		; The values may have been changed
+.move_add_lo	ADC # 40		; to negatives above.
+		STA .sptr
+		LDA .sptr+1
+.move_add_hi	ADC # 0
+		STA .sptr+1
+
+		DEX			; Check next row
+		BPL .loop
+
+		PLA			; Restore cursor position
+		TAY
+		PLA
+		TAX
+		JSR goto_xy
+
+		CLC			; Prevent menu redraw
+		RTS
+
+;------------------------------------------------------------------------------
+.call_check	JSR .check_address
+		JMP .check_return
+
+;------------------------------------------------------------------------------
+.check_address	STA .strbuf		; Save command with address to string
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+1
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+2
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+3
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+4
+		LDA #' '
+		STA .strbuf+5
+
+		TXA			; Save line counter
+		PHA
+		LDY # 1
+		JSR line_expect_int16	; Convert adress to (int16).X/.A
+		BCC .found		; Update screen, don't return here
+		PLA
+		TAX			; Restore line counter
+		RTS			; Continue scan
+
+;------------------------------------------------------------------------------
+.found		TAY			; Keep high byte of found address
+		LDA .strbuf		; Check which list to continue
+!convtab SCR {	CMP #'.' }
+		BEQ .disassemble
+!convtab SCR {	CMP #':' }
+		BEQ .hexdump
+!convtab SCR {	CMP #'%' }
+		BEQ .bindump
+		;; to be continued
+
+;------------------------------------------------------------------------------
+.bindump	TYA			; Save address high byte
+		PHA
+		TXA			; Save address low byte
+		PHA
+
+		LDY # 15		; Single byte or sprite mode?
+		LDA (.sptr),Y
+!convtab SCR {	CMP #' ' }
+		BEQ .is_single
+!convtab SCR {	CMP #':' }
+		BEQ .is_single
+		LDY #$ff		; Sprite mode:
+		LDA # 3			; Offset = 3
+		STA .bin_add_lo+1
+		BNE .skip_single	; Will always jump
+
+.is_single	LDY # 0			; Single byte mode:
+		LDA # 1			; Offset = 1
+		STA .bin_add_lo+1
+.skip_single
+		LDA # 0			; Reset offset high byte
+		STA .bin_add_hi+1
+
+		LDA .move_add_hi+1	; Check direction
+		BNE .bindump_down
+.bindump_up	SEC			; Multiply offset by (-1)
+		LDA # 0
+		SBC .bin_add_lo+1
+		STA .bin_add_lo+1
+		LDA .bin_add_hi+1
+		SBC # 0
+		STA .bin_add_hi+1
+.bindump_down
+.bindump_go	CLC
+		PLA			; Get address low byte
+.bin_add_lo	ADC #.PLACEHOLDER
+		TAX
+		PLA			; Get address high byte
+.bin_add_hi	ADC #.PLACEHOLDER
+		JSR bindump_single_line
+		JMP .done
+
+;------------------------------------------------------------------------------
+.hexdump	TXA			; Restore high byte
+		SEC
+.hexdump_sbc_lo	SBC # 8			; Move address by 8
+		TAX
+		TYA
+.hexdump_sbc_hi	SBC # 0
+		JSR hexdump_single_line
+		JMP .done
+
+;------------------------------------------------------------------------------
+.disassemble	LDA .move_add_hi+1	; Check direction
+		BNE .disass_down
+
+.disass_up	TYA			; Restore high byte
+		LDY # 1
+		JSR find_preceding_instruction	; Try one byte instruction
+		BCC .disass_show		; There is one, show it
+
+		LDY # 2				; Try two byte instruction
+		JSR find_preceding_instruction
+		BCC .disass_show
+
+		LDY # 3
+		JSR find_preceding_instruction	; Try three byte instruction
+		BCC .disass_show
+
+		INX			; No fitting instruction found, show
+		INX			; ??? opcode
+		CPX #$02
+		BCS .skip_hi1		; Move address in .X/.A back, we are
+		CLC			; showing a 1-byte instruction
+		ADC # 1
+.skip_hi1
+		PHA			; Tell disassemble.a:disassemble not to
+		LDA #$ff		; show a possible instruction, but ???.
+		STA force_unknown_opc
+		PLA
+		JMP .disass_show
+
+.disass_down	TYA			; Restore high byte
+		JSR disassemble		; Get .X/.A pointer to next instruction
+.disass_show	JSR disassemble_single_line
+!ifdef DISASS_DIVIDER {
+		; disassemble.a:.get_machine_code has set scroll_opcode for us:
+		LDA scroll_opcode	; Get opcode of last printed instruct'n
+		JSR check_print_divider	; Show line, if RTS, JMP, etc.
+}
+		;JMP .done
+;------------------------------------------------------------------------------
+.done		PLA			; Remove return address
+		PLA
+
+		PLA			; Remove line counter
+
+		PLA			; Restore cursor position
+		TAY
+		PLA
+		TAX
+		JSR goto_xy
+
+		RTS			; Return to mmfn_crsr_up/down
+
+
+find_preceding_instruction
+;==============================================================================
+; IN:	.X/.A	int16	Adress to decrease and return instruction length
+;	.Y	int8	Queried length of instruction
+; OUT:	.X/.A	int16	Decremented address
+;	CARRY	Boolean	FALSE, if instruction length = .Y
+
+	.rptr		= $f7
+	.compare_val	= $ff
+	;;.opcode		= prev_rom_config
+
+		STY .compare_val	; Value to compare against
+
+		DEX			; Decrement address
+		CPX #$ff
+		BNE .skip_hi
+		SEC
+		SBC # 1
+.skip_hi
+		STX .rptr		; Prepare read pointer
+		STA .rptr+1
+
+		PHA			; Keep decremented address
+		TXA
+		PHA
+
+		LDY # 0
+		LDA (.rptr),Y		; Get opcode
+
+!ifdef ILLEGAL_OPCODES {
+		LDY illegal_opcs
+		BNE .skip_illegals
+
+		TAY
+		LDA opcode_matrix,Y
+		CMP # $38*3		; First illegal opcode string index
+		BCS .not_equal
+		TYA
+.skip_illegals
+}
+		JSR get_instruction_length
+
+		CMP .compare_val
+		BNE .not_equal
+
+.equal		PLA			; Retreive decremented address
+		TAX
+		PLA
+
+		CLC
+		RTS
+
+.not_equal	PLA			; Retreive decremented address
+		TAX
+		PLA
+
+		SEC
+		RTS
+
+
+mmfn_crsr_up
+;==============================================================================
+		LDA #petscii_up
+		JSR putc
+		LDA puts_scrolled
+		BEQ .up_done
+		JSR .find_command
+.up_done	CLC			; Prevent menu redraw
+		RTS
+
+
+mmfn_crsr_down
+;==============================================================================
+		LDA #petscii_down
+		JSR putc
+		LDA puts_scrolled
+		BEQ .down_done
+		JSR .find_command
+.down_done	CLC			; Prevent menu redraw
+		RTS
+
+
+}
+;==============================================================================
+!eof

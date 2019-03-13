@@ -1,0 +1,564 @@
+;==============================================================================
+; DEMON - copy(l)eft 2018 http://harald.ist.org/
+; tabsize=8
+;==============================================================================
+
+
+;==============================================================================
+!zone DISASSEMBLE_INSTRUCTION
+;==============================================================================
+
+	.iptr	= $f7		; Instruction pointer, fetching machine code
+	.sptr	= $f9		; String pointer
+	.cctr	= $fb		; Char counter for .strbuf
+	.opcode	= $fc		; Holds opcode while processing
+	.amode	= $fd		; Address mode, indicates syntax of instruction
+	.ilen	= $fe
+	.strbuf	= TAPE_BUFFER	; Temporary string
+
+disassemble
+;==============================================================================
+; IN:	.X/.A	uint16	Pointer to instruction to disassemble
+; OUT:	.X/.A	uint16	Pointer to following instruction
+;	.strbuf		Disassembled instruction (PETSCII)
+
+		STX .iptr		; Save pointer to instruction in ZP
+		STA .iptr+1
+
+		LDA # 1			; Minimum length of an instruction
+		STA .ilen
+
+		LDY # 0
+		LDA (.iptr),Y		; Get opcode
+		STA .opcode
+
+
+!ifdef ILLEGAL_OPCODES {
+		LDY illegal_opcs
+		BNE .legal
+
+		TAY
+		LDA opcode_matrix,Y
+		CMP # $38*3		; First illegal opcode string index
+		BCC .legal
+		LDA #$02		; mKIL = ???
+		STA .opcode
+.legal
+}
+!ifdef SCROLL_CONTINUE {
+		LDA force_unknown_opc	; Scrolling up, and we couldn't find an
+		BEQ .skip_force		; instruction that fits? Show ???.
+		LDA # 0
+		STA force_unknown_opc	; Clear force flag
+		LDA #$02		; mKIL = ???
+		STA .opcode
+.skip_force
+}
+		JSR .get_address	; Add 4 hex digits to buffer string
+		JSR .get_mnemonic	; Add 3-char instruction name
+		JSR .get_prefix		; Add '#' or '(', saving .amode
+		JSR .get_parameter	; Add '$hhll'
+		JSR .get_postfix	; Add ",X", ",Y", ")", ",X)" or "),Y"
+		JSR .get_machine_code	; Fill in hex machine code between
+					; address and mnemonic
+		LDA # 0
+		LDY .cctr
+.loop_clearbuf	STA .strbuf,Y		; Set EOS marker
+		INY
+		CPY # 39
+		BCC .loop_clearbuf
+
+		CLC
+		LDA .iptr		; Add instruction length to pointer
+		ADC .ilen
+		TAX
+		LDA .iptr+1
+		ADC # 0			; Return updated address in .X/.A
+
+		LDY .ilen		; Return nr. bytes in .Y
+
+		RTS
+
+
+.get_address
+;------------------------------------------------------------------------------
+		; Store address of the instruction in buffer string
+
+		LDA .iptr+1
+		JSR byte_to_hex
+		STA .strbuf
+		STX .strbuf+1
+
+		LDA .iptr
+		JSR byte_to_hex
+		STA .strbuf+2
+		STX .strbuf+3
+
+		LDA #' '
+		STA .strbuf+4
+
+		RTS
+
+
+.get_mnemonic
+;------------------------------------------------------------------------------
+		; Store 3-char mnemonic of instruction in buffer string
+
+		LDA .opcode
+
+		TAY			; Get pointer to mnemonic_names list
+		LDA opcode_matrix,Y
+
+		STA .sptr
+		LDA #>mnemonic_names	; Constant due to !align of the matrix
+		STA .sptr+1
+
+		LDY # 0			; Save mnemonic to buffer string
+		LDA (.sptr),Y
+		STA .strbuf+14,Y	; Leaving space for machine code
+
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+14,Y
+
+		INY
+		LDA (.sptr),Y
+		STA .strbuf+14,Y
+
+		LDA #' '		; Add space
+		STA .strbuf+17
+
+		RTS
+
+
+.get_prefix
+;------------------------------------------------------------------------------
+		; Store chars before the operand value, that indicate the
+		; address mode: "#", "$", "("
+
+		LDY .opcode		; Current instruction to show
+		LDA amode_matrix,Y	; Get syntax of instruction
+		AND #$7f		; Remove "not-default" bit
+		STA .amode		; Remember for later
+		TAY
+		LDA amode_prefix,Y	; Get prefix character
+		BEQ .no_prefix		; No prefix? (Char = 0)
+		STA .strbuf+18		; Save prefix to string
+		LDA # 19		; Select next empty char in string
+		BNE .prefix_cctr	; Will always jump
+
+.no_prefix	LDA # 18		; This char wasn't used, set as next
+.prefix_cctr	STA .cctr		; Keep track, where to put next char
+		RTS
+
+
+.get_parameter
+;------------------------------------------------------------------------------
+		; Add the numeric part of the operand, transform relative
+		; addresses to the actual target as absolute address
+
+		LDA .amode
+		CMP #aIMM
+		BCC .no_amode
+
+		LDY .cctr
+		INC .cctr
+		LDA #'$'		; Every operand starts with a '$'
+		STA .strbuf,Y
+
+		LDY # 1			; Get operand
+		LDA (.iptr),Y		; Low byte
+		STA dass_temp_lo
+		INY
+		LDA (.iptr),Y		; High byte
+		STA dass_temp_hi
+
+		LDA .amode
+		CMP #aREL
+		BNE .skip_rel
+
+; https://www.c64-wiki.com/wiki/Relative_addressing
+; If a branching instruction is situated at address a, and needs to branch to a
+; given address b, the single-byte offset argument that should follow the
+; opcode is calculated as b − a − 2.
+
+		LDY # 0			; Prepare summand high byte for
+		LDA dass_temp_lo	; positive offset
+		BPL .start_rel
+		LDY #$ff		; Offset is negative, subtract 1 from
+.start_rel	STY $02			; high byte
+		CLC
+		LDA .iptr		; Get current address
+		ADC dass_temp_lo	; Add offset
+		STA dass_temp_lo
+		LDA .iptr+1
+		ADC $02
+		STA dass_temp_hi
+		CLC			; Add extra 2 (instruction length)
+		LDA dass_temp_lo
+		ADC # 2
+		STA dass_temp_lo
+		LDA dass_temp_hi
+		ADC # 0
+		STA dass_temp_hi
+		DEC .ilen		; Show one byte less machine code
+.skip_rel
+		LDA .amode
+		CMP #aREL		; Instructions listed before aREL have
+		BCC .one_byte		; only one byte operands
+
+.two_bytes	LDA dass_temp_hi	; Get byte after opcode
+		JSR byte_to_hex
+		LDY .cctr
+		STA .strbuf,Y		; Save hex values to buffer string
+		TXA
+		STA .strbuf+1,Y
+		INY			; Skip two characters
+		INY
+		STY .cctr
+		INC .ilen		; Count the extra byte
+
+.one_byte	LDA dass_temp_lo	; Get next selected byte (high byte)
+		JSR byte_to_hex
+		LDY .cctr
+		STA .strbuf,Y		; Save hex values to buffer string
+		TXA
+		STA .strbuf+1,Y
+		INY			; Skip two characters
+		INY
+		STY .cctr
+		INC .ilen		; Count parameter byte
+
+.no_amode	RTS
+
+
+.get_postfix
+;------------------------------------------------------------------------------
+		; Store chars after the operand value, that indicate the
+		; address mode: ",X", ",Y", ")", ",X)", "),Y"
+
+		LDA .amode
+		ASL
+		ASL
+		TAY
+		LDX .cctr
+.loop_postfix	LDA amode_postfix,Y
+		BEQ .postfix_done
+		STA .strbuf,X
+		INX
+		INY
+		JMP .loop_postfix
+
+.postfix_done	STX .cctr
+		RTS
+
+
+.get_machine_code
+;------------------------------------------------------------------------------
+		; Convert the machine code to PETSCII hex numbers and insert
+		; in the empty area between address and mnemonic
+
+		LDY # 0
+		LDA (.iptr),Y		; Get opcode
+
+!ifdef SCROLL_CONTINUE {
+		STA scroll_opcode	; Remember opc for scroll auto complete
+}
+		JSR byte_to_hex
+		STA .strbuf+5		; Store first hex-byte of machine code
+		STX .strbuf+6		; to buffer string
+		LDA #' '
+		STA .strbuf+7
+
+		LDY # 1
+		CPY .ilen
+		BEQ .fill_2		; Two byte locations empty
+
+		LDA (.iptr),Y		; Store second hex-byte in buffer
+		JSR byte_to_hex
+		STA .strbuf+8
+		STX .strbuf+9
+		LDA #' '
+		STA .strbuf+10
+
+		LDY # 2
+		CPY .ilen
+		BEQ .fill_1		; One byte location empty
+
+		LDA (.iptr),Y		; Store third hex-byte in buffer
+		JSR byte_to_hex
+		STA .strbuf+11
+		STX .strbuf+12
+		LDA #' '
+		STA .strbuf+13
+		RTS
+
+.fill_2		STA .strbuf+8		; Fill string with spaces
+		STA .strbuf+9
+		STA .strbuf+10
+.fill_1		STA .strbuf+11
+		STA .strbuf+12
+		STA .strbuf+13
+		RTS
+
+
+;==============================================================================
+!zone DISASSEMBLE_SHOW_FLAGS
+;==============================================================================
+
+	.sptr	= $f7
+	.flags	= $f9
+	.cycles	= $fa
+
+disassemble_show_flags
+;------------------------------------------------------------------------------
+; Print number of cycles and affected flags of an instruction
+; IN:	.X/.A	int16	Address of the instruction to show the flags for
+
+		STX .sptr		; Save address in pointer
+		STA .sptr+1
+		LDY # 0
+		LDA (.sptr),Y		; Load opcode from memory
+		TAY
+		LDA cycle_matrix,Y
+		STA .cycles
+		LDA opcode_matrix,Y	; Load opcode index
+		TAY
+		LDA affected_flags,Y	; Get definition byte
+		STA .flags
+
+		LDA zp_crsr_col		; Remember cursor position
+		PHA
+		LDA zp_crsr_row
+		PHA
+
+		LDX # 30		; Start printing near end of the line
+		LDY zp_crsr_row
+		JSR goto_xy
+
+		LDA #':'		; Print separator
+		JSR putc
+
+		LDA .cycles		; Print typical nr. of cycles
+		ADC #$30
+		JSR putc
+
+		LDA .flags		; Skip, if no flags are affected
+		BEQ .none
+
+		LDX # 8			; Show 8 bits
+		LDY # 0
+.loop		ASL .flags		; Get MSB
+		BCC .skip_bit
+		LDA s_flag_names,Y
+		JSR putc
+.skip_bit	INY
+		DEX
+		BNE .loop
+		BEQ .done
+
+.none		LDA #'-'		; Print "-" for instructions, that
+		JSR putc		; don't affect any flags
+
+.done		PLA			; Restore cursor position
+		TAY
+		PLA
+		TAX
+		JSR goto_xy
+
+		RTS
+
+
+;==============================================================================
+!zone DISASSEMBLE_SINGLE_LINE
+;==============================================================================
+
+	.saddr = param_1		; Shared with elfn_disassemble!
+	.strbuf = TAPE_BUFFER
+
+disassemble_single_line
+;------------------------------------------------------------------------------
+; IN:	.X/.A	int16	Address to disassemble and print to screen
+; OUT:	.Y	int8	Length of instruction (nr. bytes)
+
+		STA $02
+		PHA
+		TXA
+		PHA
+		LDA $02
+
+!ifdef SYMBOLS	JSR dumpaddr_to_symbol	; Show extra line with symbol, if exists
+
+		JSR disassemble		; Create string in TAPE_BUFFER
+		STX .saddr		; Save following address for next loop
+		STA .saddr+1		; iteration, keep .Y (.ilen)
+
+!ifdef SYMBOLS	JSR address_to_symbol	; Replace address with symbol
+
+		LDA #'.'
+		JSR putc
+
+		LDA #<.strbuf		; Print disassembled instruction
+		PHA
+		LDA #>.strbuf
+		PHA
+		JSR puts
+
+		SEC			; Clear rest of line
+		LDA #<s_space_40
+		ADC zp_crsr_col
+		PHA
+		LDA #>s_space_40
+		ADC # 0
+		PHA
+		JSR puts
+
+		PLA
+		TAX
+		PLA
+		JSR disassemble_show_flags
+
+		RTS			; Returning .ilen in .Y
+
+
+;==============================================================================
+!zone ELFN_DISASSEMBLE
+;==============================================================================
+
+	.saddr	= param_1		; Shared with disassemble_single_line!
+	.eaddr	= param_2
+	.optr	= $f7
+	.strbuf = TAPE_BUFFER
+
+.error		JMP line_show_error
+		;RTS
+
+elfn_disassemble
+;------------------------------------------------------------------------------
+		LDY # 1			; Skip the 'D'
+.param_1	JSR line_expect_int16	; Try reading the start address
+		BCS .error
+		STA .saddr+1
+		STA .eaddr+1
+		STX .saddr
+		STX .eaddr
+.param_2	JSR line_expect_int16	; Try reading the end address
+		BCC .check_2		; Address found, check if valid
+
+		CPY # 6			; No 2nd addr given?
+		BNE .error		; Something was given, but it's garbage
+		BEQ .one_line
+
+.check_2	CMP .saddr+1		; Check, if second address is smaller
+		BCC .one_line		; than first. If so, ignore it
+		BEQ .check_2lo
+		BCS .save_2
+.check_2lo	CPX .saddr
+		BCC .one_line
+
+.save_2		STA .eaddr+1		; Save 2nd addr in .X/.A
+		STX .eaddr
+.one_line
+
+.disassemble	CLC			; Increase end address, so we get to
+		LDA .eaddr		; see any instructions starting there,
+		ADC # 1			; too
+		STA .eaddr
+		LDA .eaddr+1
+		ADC # 0
+		STA .eaddr+1
+
+.loop		JSR puts_newline
+
+		LDA .saddr+1		; Get current address
+		LDX .saddr
+
+!ifdef DISASS_DIVIDERS {
+		STX .optr
+		STA .optr+1
+		LDY # 0
+		LDA (.optr),Y		; Get opcode
+		PHA
+		LDA .optr+1
+}
+;------------------------------------------------------------------------------
+		JSR disassemble_single_line
+;------------------------------------------------------------------------------
+!ifdef DISASS_DIVIDERS {
+		PLA
+		JSR check_print_divider
+}
+		LDA zp_pressed_key
+		CMP #$3f		; Run/Stop pressed?
+		BEQ .done
+
+		LDA .saddr+1		; End address reached?
+		CMP .eaddr+1
+		BCC .loop
+		LDA .saddr
+		CMP .eaddr
+		BCC .loop
+
+.done		LDA # 0
+		STA zp_kbdbuf_len
+		CLC			; Indicate no error, new line
+		RTS
+
+
+!ifdef DISASS_DIVIDERS {
+
+	.temp = hexd_address
+	.sptr = $f7
+
+check_print_divider
+;------------------------------------------------------------------------------
+; IN:	.A	int8	Opcode, that was just printed and may need to be
+;			followed by a divider line
+
+		CMP #$4c
+		BEQ .show_divider
+		CMP #$6c
+		BEQ .show_divider
+		CMP #$40
+		BEQ .show_divider
+		CMP #$60
+		BEQ .show_divider
+		BNE .skip_divider
+
+.show_divider	LDA zp_crsr_row
+		CMP # 3
+		BCS .skip_insert
+		JSR insert_line
+.skip_insert
+		LDY # 2
+.loop_strstart	LDA s_divider_line,Y
+		STA .strbuf,Y
+		DEY
+		BPL .loop_strstart
+
+		LDA petcolor_text
+		STA .strbuf+32
+		LDA #':'
+		STA .strbuf+33
+		LDA # 0
+		STA .strbuf+34
+
+		LDA #DIVIDER_CHAR
+		LDY # 28
+.loop_line	STA .strbuf+3,Y
+		DEY
+		BPL .loop_line
+
+		LDA #<.strbuf		;;s_divider_line
+		PHA
+		LDA #>.strbuf		;;s_divider_line
+		PHA
+		JSR puts
+.skip_divider
+		RTS
+
+s_divider_line	!pet 13, ".", petscii_lgrey
+}
+
+;==============================================================================
+!eof
